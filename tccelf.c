@@ -3128,6 +3128,9 @@ LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
     s->nb_errors = 0;
     if (s->test_coverage)
         tcc_tcov_add_file(s, filename);
+#ifdef TCC_TARGET_WASM32
+    return tcc_output_wast(s, filename);
+#endif
     if (s->output_type == TCC_OUTPUT_OBJ)
         return elf_output_obj(s, filename);
 #ifdef TCC_TARGET_PE

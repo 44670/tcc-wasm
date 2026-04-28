@@ -7243,8 +7243,12 @@ again:
             gfunc_return(&func_vt);
         skip(';');
         /* jump unless last stmt in top-level block */
-        if (tok != '}' || local_scope != 1)
+        if (tok != '}' || local_scope != 1) {
+#ifdef TCC_TARGET_WASM32
+            wasm32_mark_return_jump();
+#endif
             rsym = gjmp(rsym);
+        }
         if (debug_modes)
 	    tcc_tcov_block_end (tcc_state, -1);
         CODE_OFF();

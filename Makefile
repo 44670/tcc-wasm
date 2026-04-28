@@ -114,6 +114,7 @@ DEF-arm64-FreeBSD  = $(DEF-arm64) -DTARGETOS_FreeBSD
 DEF-arm64-NetBSD   = $(DEF-arm64) -DTARGETOS_NetBSD
 DEF-arm64-OpenBSD  = $(DEF-arm64) -DTARGETOS_OpenBSD
 DEF-riscv64        = -DTCC_TARGET_RISCV64
+DEF-wasm32         = -DTCC_TARGET_WASM32
 DEF-c67            = -DTCC_TARGET_C67 -w # disable warnigs
 DEF-x86_64-FreeBSD = $(DEF-x86_64) -DTARGETOS_FreeBSD
 DEF-x86_64-NetBSD  = $(DEF-x86_64) -DTARGETOS_NetBSD
@@ -131,7 +132,7 @@ all: $(PROGS) $(TCCLIBS) $(TCCDOCS)
 
 # cross compiler targets to build
 TCC_X = i386 x86_64 i386-win32 x86_64-win32 x86_64-osx arm arm64 arm-wince c67
-TCC_X += riscv64 arm64-osx
+TCC_X += riscv64 arm64-osx wasm32
 # TCC_X += arm-fpa arm-fpa-ld arm-vfp arm-eabi
 
 # cross libtcc1.a targets to build
@@ -216,6 +217,7 @@ arm64_FILES = $(CORE_FILES) arm64-gen.c arm64-link.c arm64-asm.c
 arm64-osx_FILES = $(arm64_FILES) tccmacho.c
 c67_FILES = $(CORE_FILES) c67-gen.c c67-link.c tcccoff.c
 riscv64_FILES = $(CORE_FILES) riscv64-gen.c riscv64-link.c riscv64-asm.c
+wasm32_FILES = $(CORE_FILES) wasm32-gen.c wasm32-link.c
 
 TCCDEFS_H$(subst yes,,$(CONFIG_predefs)) = tccdefs_.h
 
@@ -282,6 +284,27 @@ tcc$(EXESUF): tcc.o $(LIBTCC)
 
 $(CROSS_TARGET)-tcc$(EXESUF): $(TCC_FILES)
 	$S$(CC) -o $@ $^ $(LIBS) $(LDFLAGS)
+
+EMCC ?= emcc
+WASM_DEMO_HTML = web/tcc-wasm-demo.html
+WASM_DEMO_DEFINES = -DONE_SOURCE=1 -DTCC_TARGET_WASM32
+WASM_DEMO_DEFINES += -DCONFIG_TCC_CROSSPREFIX="\"wasm32-\""
+WASM_DEMO_DEFINES += -DCONFIG_TCCDIR="\"/\""
+WASM_DEMO_DEFINES += -DCONFIG_TCC_SYSINCLUDEPATHS="\"/include\""
+WASM_DEMO_DEFINES += -DCONFIG_TCC_LIBPATHS="\"/\""
+WASM_DEMO_DEFINES += -DTCC_GITHASH="\"browser\""
+WASM_DEMO_EMFLAGS = -O2 -fcommon -I$(TOP) $(WASM_DEMO_DEFINES)
+WASM_DEMO_EMFLAGS += --no-entry --embed-file $(TOPSRC)/include@/include
+WASM_DEMO_EMFLAGS += -sENVIRONMENT=web -sSINGLE_FILE=1
+WASM_DEMO_EMFLAGS += -sINITIAL_MEMORY=268435456 -sALLOW_MEMORY_GROWTH=0
+WASM_DEMO_EMFLAGS += -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 -sFORCE_FILESYSTEM=1
+WASM_DEMO_EMFLAGS += -sEXPORTED_FUNCTIONS='["_tcc_compile_file"]'
+WASM_DEMO_EMFLAGS += -sEXPORTED_RUNTIME_METHODS='["FS","ccall"]'
+
+wasm-demo wasm-demo-html: $(WASM_DEMO_HTML)
+
+$(WASM_DEMO_HTML): web/tcc_browser.c web/tcc-wasm-shell.html $(wasm32_FILES) $(TCCDEFS_H)
+	$S$(EMCC) web/tcc_browser.c -o $@ --shell-file web/tcc-wasm-shell.html $(WASM_DEMO_EMFLAGS)
 
 # profiling version
 tcc_p$(EXESUF): $($T_FILES)
@@ -460,6 +483,9 @@ config.mak:
 # run all tests
 test:
 	@$(MAKE) -C tests
+# run wasm32 backend tests
+wasm-test wasm32-test: tests/wasm32/run.sh
+	@tests/wasm32/run.sh
 # run test(s) from tests2 subdir (see make help)
 tests2.%:
 	@$(MAKE) -C tests/tests2 $@
@@ -485,6 +511,7 @@ clean:
 	@rm -f tcc *-tcc tcc_p tcc_c tcc_s
 	@rm -f tags ETAGS *.o *.a *.so* *.out *.log lib*.def *.exe *.dll
 	@rm -f a.out *.dylib *_.h *.pod *.tcov
+	@rm -f web/tcc-wasm-demo.html
 	@$(MAKE) -s -C lib $@
 	@$(MAKE) -s -C tests $@
 
@@ -492,7 +519,7 @@ distclean: clean
 	@rm -vf config.h config.mak config.texi
 	@rm -vf $(TCCDOCS)
 
-.PHONY: all clean test tar tags ETAGS doc distclean install uninstall FORCE
+.PHONY: all clean test wasm-test wasm32-test tar tags ETAGS doc distclean install uninstall FORCE
 
 help:
 	@echo "make"
@@ -507,6 +534,8 @@ help:
 	@echo "   $(wordlist 9,99,$(TCC_X))"
 	@echo "make test"
 	@echo "   run all tests"
+	@echo "make wasm-test"
+	@echo "   run wasm32 backend compile/assemble/runtime/shape tests"
 	@echo "make tests2.all / make tests2.37 / make tests2.37+"
 	@echo "   run all/single test(s) from tests2, optionally update .expect"
 	@echo "make testspp.all / make testspp.17"
@@ -515,6 +544,8 @@ help:
 	@echo "   run tests as above with code coverage. After test(s) see tcc_c$(EXESUF).tcov"
 	@echo "make sani-test / sani-tests2.37 / sani-testspp.17"
 	@echo "   run tests as above with sanitize option."
+	@echo "make wasm-demo"
+	@echo "   build web/tcc-wasm-demo.html, a single-file browser C-to-WAT demo"
 	@echo "make test-install"
 	@echo "   run tests with the installed tcc"
 	@echo "Other supported make targets:"

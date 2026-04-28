@@ -149,11 +149,13 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* #define TCC_TARGET_ARM64  *//* ARMv8 code generator */
 /* #define TCC_TARGET_C67    *//* TMS320C67xx code generator */
 /* #define TCC_TARGET_RISCV64 *//* risc-v code generator */
+/* #define TCC_TARGET_WASM32 *//* WebAssembly text code generator */
 
 /* default target is I386 */
 #if !defined(TCC_TARGET_I386) && !defined(TCC_TARGET_ARM) && \
     !defined(TCC_TARGET_ARM64) && !defined(TCC_TARGET_C67) && \
-    !defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_RISCV64)
+    !defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_RISCV64) && \
+    !defined(TCC_TARGET_WASM32)
 # if defined __x86_64__
 #  define TCC_TARGET_X86_64
 # elif defined __arm__
@@ -215,13 +217,13 @@ extern long double strtold (const char *__nptr, char **__endptr);
     || defined TARGETOS_NetBSD \
     || defined TARGETOS_FreeBSD_kernel
 # define TARGETOS_BSD 1
-#elif !(defined TCC_TARGET_PE || defined TCC_TARGET_MACHO)
+#elif !(defined TCC_TARGET_PE || defined TCC_TARGET_MACHO || defined TCC_TARGET_WASM32)
 # define TARGETOS_Linux 1 /* for tccdefs_.h */
 #endif
 
 #if defined TCC_TARGET_PE || defined TCC_TARGET_MACHO
 # define ELF_OBJ_ONLY /* create elf .o but native executables */
-#else
+#elif !defined TCC_TARGET_WASM32
 # define TCC_TARGET_UNIX 1
 #endif
 
@@ -395,6 +397,9 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # include "riscv64-gen.c"
 # include "riscv64-link.c"
 # include "riscv64-asm.c"
+#elif defined(TCC_TARGET_WASM32)
+# include "wasm32-gen.c"
+# include "wasm32-link.c"
 #else
 #error unknown target
 #endif
@@ -1725,6 +1730,12 @@ ST_FUNC void gen_cvt_sxtw(void);
 ST_FUNC void gen_increment_tcov (SValue *sv);
 #endif
 
+/* ------------ wasm32-gen.c ------------ */
+#ifdef TCC_TARGET_WASM32
+ST_FUNC int wasm32_output_module(FILE *f);
+ST_FUNC void wasm32_mark_return_jump(void);
+#endif
+
 /* ------------ c67-gen.c ------------ */
 #ifdef TCC_TARGET_C67
 #endif
@@ -1733,6 +1744,11 @@ ST_FUNC void gen_increment_tcov (SValue *sv);
 #ifdef TCC_TARGET_COFF
 ST_FUNC int tcc_output_coff(TCCState *s1, FILE *f);
 ST_FUNC int tcc_load_coff(TCCState * s1, int fd);
+#endif
+
+/* ------------ wasm32-link.c ------------ */
+#ifdef TCC_TARGET_WASM32
+ST_FUNC int tcc_output_wast(TCCState *s1, const char *filename);
 #endif
 
 /* ------------ tccasm.c ------------ */
@@ -1832,7 +1848,7 @@ ST_FUNC void tcc_debug_typedef(TCCState *s1, Sym *sym);
 ST_FUNC void tcc_debug_stabn(TCCState *s1, int type, int value);
 ST_FUNC void tcc_debug_fix_forw(TCCState *s1, CType *t);
 
-#if !(defined ELF_OBJ_ONLY || defined TCC_TARGET_ARM || defined TARGETOS_BSD)
+#if !(defined ELF_OBJ_ONLY || defined TCC_TARGET_ARM || defined TARGETOS_BSD || defined TCC_TARGET_WASM32)
 ST_FUNC void tcc_eh_frame_start(TCCState *s1);
 ST_FUNC void tcc_eh_frame_end(TCCState *s1);
 ST_FUNC void tcc_eh_frame_hdr(TCCState *s1, int final);

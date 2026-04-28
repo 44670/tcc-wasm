@@ -53,6 +53,9 @@
 #include "riscv64-gen.c"
 #include "riscv64-link.c"
 #include "riscv64-asm.c"
+#elif defined(TCC_TARGET_WASM32)
+#include "wasm32-gen.c"
+#include "wasm32-link.c"
 #else
 #error unknown target
 #endif
@@ -1005,6 +1008,8 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
 # ifdef TCC_IS_NATIVE
     tcc_add_macos_sdkpath(s);
 # endif
+#elif defined TCC_TARGET_WASM32
+    /* WAST output is currently freestanding: no crt or platform library. */
 #else
     /* paths for crt objects */
     tcc_split_path(s, &s->crt_paths, &s->nb_crt_paths, CONFIG_TCC_CRTPREFIX);
@@ -1783,12 +1788,16 @@ static const char dumpmachine_str[] =
     "aarch64"
 #elif defined TCC_TARGET_RISCV64
     "riscv64"
+#elif defined TCC_TARGET_WASM32
+    "wasm32"
 #endif
     "-"
 #ifdef TCC_TARGET_PE
     "mingw32"
 #elif defined(TCC_TARGET_MACHO)
     "apple-darwin"
+#elif defined TCC_TARGET_WASM32
+    "unknown"
 #elif TARGETOS_FreeBSD || TARGETOS_FreeBSD_kernel
     "freebsd"
 #elif TARGETOS_OpenBSD
