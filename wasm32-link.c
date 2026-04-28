@@ -52,6 +52,15 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type,
         add32le(ptr, val);
 }
 
+ST_FUNC int tcc_output_wast_file(TCCState *s1, FILE *f)
+{
+    int ret;
+    tcc_enter_state(s1);
+    ret = wasm32_output_module(f);
+    tcc_exit_state(s1);
+    return ret;
+}
+
 ST_FUNC int tcc_output_wast(TCCState *s1, const char *filename)
 {
     FILE *f = fopen(filename, "w");
@@ -59,9 +68,7 @@ ST_FUNC int tcc_output_wast(TCCState *s1, const char *filename)
     if (!f)
         return tcc_error_noabort("could not write '%s': %s",
                                  filename, strerror(errno));
-    tcc_enter_state(s1);
-    ret = wasm32_output_module(f);
-    tcc_exit_state(s1);
+    ret = tcc_output_wast_file(s1, f);
     if (fclose(f))
         ret = tcc_error_noabort("could not close '%s': %s",
                                 filename, strerror(errno));

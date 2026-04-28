@@ -286,6 +286,7 @@ $(CROSS_TARGET)-tcc$(EXESUF): $(TCC_FILES)
 	$S$(CC) -o $@ $^ $(LIBS) $(LDFLAGS)
 
 EMCC ?= emcc
+WASM_AS ?= $(or $(shell command -v wasm-as 2>/dev/null),$(wildcard $(HOME)/emsdk/upstream/bin/wasm-as),wasm-as)
 WASM_DEMO_HTML = web/tcc-wasm-demo.html
 WASM_DEMO_DEFINES = -DONE_SOURCE=1 -DTCC_TARGET_WASM32
 WASM_DEMO_DEFINES += -DCONFIG_TCC_CROSSPREFIX="\"wasm32-\""
@@ -305,6 +306,41 @@ wasm-demo wasm-demo-html: $(WASM_DEMO_HTML)
 
 $(WASM_DEMO_HTML): web/tcc_browser.c web/tcc-wasm-shell.html $(wasm32_FILES) $(TCCDEFS_H)
 	$S$(EMCC) web/tcc_browser.c -o $@ --shell-file web/tcc-wasm-shell.html $(WASM_DEMO_EMFLAGS)
+
+WASM_BARE_WASM = web/tcc-browser-bare.wasm
+WASM_BARE_HTML = web/tcc-wasm-bare.html
+WASM_BARE_SHELL = web/tcc-wasm-bare-shell.html
+WASM_BARE_EMFLAGS = -O2 -fcommon -I$(TOP) $(WASM_DEMO_DEFINES)
+WASM_BARE_EMFLAGS += --no-entry -sSTANDALONE_WASM=1 -sFILESYSTEM=0
+WASM_BARE_EMFLAGS += -fwasm-exceptions -sSUPPORT_LONGJMP=wasm
+WASM_BARE_EMFLAGS += -sINITIAL_MEMORY=268435456 -sALLOW_MEMORY_GROWTH=0
+WASM_BARE_EMFLAGS += -sEXPORTED_FUNCTIONS='["_malloc","_free","_tcc_bare_compile","_tcc_bare_output","_tcc_bare_output_len","_tcc_bare_error","_tcc_bare_error_len"]'
+
+wasm-bare-demo wasm-bare: $(WASM_BARE_HTML)
+
+$(WASM_BARE_WASM): web/tcc_browser_bare.c $(wasm32_FILES) $(TCCDEFS_H)
+	$S$(EMCC) web/tcc_browser_bare.c -o $@ $(WASM_BARE_EMFLAGS)
+
+$(WASM_BARE_HTML): $(WASM_BARE_SHELL) $(WASM_BARE_WASM) web/embed_wasm.js
+	$Snode web/embed_wasm.js $(WASM_BARE_SHELL) $(WASM_BARE_WASM) $@
+
+wasm-bare-test: $(WASM_BARE_WASM) tests/wasm32/bare_browser_smoke.js
+	@node tests/wasm32/bare_browser_smoke.js $(WASM_BARE_WASM)
+
+WASM_LIBC_SRC = lib/wasm32-libc.c
+WASM_LIBC_WAT = libc.wat
+WASM_LIBC_WASM = libc.wasm
+
+wasm-libc: $(WASM_LIBC_WASM)
+
+$(WASM_LIBC_WAT): $(WASM_LIBC_SRC) wasm32-tcc$(EXESUF)
+	$S./wasm32-tcc$(EXESUF) -nostdinc -nostdlib -o $@ $<
+
+$(WASM_LIBC_WASM): $(WASM_LIBC_WAT)
+	$S$(WASM_AS) $< -o $@
+
+wasm-libc-test: $(WASM_LIBC_WASM) tests/wasm32/libc_smoke.js
+	@node tests/wasm32/libc_smoke.js $(WASM_LIBC_WASM)
 
 # profiling version
 tcc_p$(EXESUF): $($T_FILES)
@@ -511,7 +547,8 @@ clean:
 	@rm -f tcc *-tcc tcc_p tcc_c tcc_s
 	@rm -f tags ETAGS *.o *.a *.so* *.out *.log lib*.def *.exe *.dll
 	@rm -f a.out *.dylib *_.h *.pod *.tcov
-	@rm -f web/tcc-wasm-demo.html
+	@rm -f web/tcc-wasm-demo.html web/tcc-wasm-bare.html web/tcc-browser-bare.wasm
+	@rm -f libc.wat libc.wasm
 	@$(MAKE) -s -C lib $@
 	@$(MAKE) -s -C tests $@
 
@@ -519,7 +556,7 @@ distclean: clean
 	@rm -vf config.h config.mak config.texi
 	@rm -vf $(TCCDOCS)
 
-.PHONY: all clean test wasm-test wasm32-test tar tags ETAGS doc distclean install uninstall FORCE
+.PHONY: all clean test wasm-test wasm32-test wasm-bare-test wasm-libc wasm-libc-test tar tags ETAGS doc distclean install uninstall FORCE
 
 help:
 	@echo "make"
@@ -546,6 +583,12 @@ help:
 	@echo "   run tests as above with sanitize option."
 	@echo "make wasm-demo"
 	@echo "   build web/tcc-wasm-demo.html, a single-file browser C-to-WAT demo"
+	@echo "make wasm-bare-demo"
+	@echo "   build a single-file browser C-to-WAT demo without Emscripten JS runtime"
+	@echo "make wasm-bare-test"
+	@echo "   instantiate the bare browser compiler wasm directly and compile smoke inputs"
+	@echo "make wasm-libc / make wasm-libc-test"
+	@echo "   build and test libc.wasm using the wasm32 TCC backend"
 	@echo "make test-install"
 	@echo "   run tests with the installed tcc"
 	@echo "Other supported make targets:"

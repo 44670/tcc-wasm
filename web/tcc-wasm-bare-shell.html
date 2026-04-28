@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TCC wasm32 Bare Host</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f9;
+      color: #171b22;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 16px;
+      border-bottom: 1px solid #d8dde6;
+      background: #ffffff;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .pane {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+      min-height: 0;
+      border-right: 1px solid #d8dde6;
+    }
+
+    .pane:last-child {
+      border-right: 0;
+    }
+
+    .bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #d8dde6;
+      background: #fbfcfe;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    textarea,
+    pre {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 14px;
+      border: 0;
+      outline: 0;
+      resize: none;
+      overflow: auto;
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      background: #ffffff;
+      color: #111827;
+      tab-size: 4;
+      white-space: pre;
+    }
+
+    pre.empty {
+      color: #6b7280;
+    }
+
+    button,
+    select {
+      border: 1px solid #b9c2d0;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #111827;
+      height: 32px;
+      padding: 0 10px;
+      font: inherit;
+    }
+
+    button {
+      background: #1f6feb;
+      border-color: #1f6feb;
+      color: #ffffff;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: .55;
+      cursor: default;
+    }
+
+    #status.error {
+      color: #b42318;
+    }
+
+    @media (max-width: 760px) {
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(280px, 1fr) minmax(280px, 1fr);
+      }
+
+      .pane {
+        border-right: 0;
+        border-bottom: 1px solid #d8dde6;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <strong>TCC wasm32 Bare Host</strong>
+      <span id="status">Loading</span>
+    </header>
+    <main>
+      <section class="pane">
+        <div class="bar">
+          <span>C Source</span>
+          <span>
+            <select id="example">
+              <option value="fib">fib</option>
+              <option value="duff">Duff copy</option>
+            </select>
+            <button id="compile" disabled>Compile</button>
+          </span>
+        </div>
+        <textarea id="source" spellcheck="false"></textarea>
+      </section>
+      <section class="pane">
+        <div class="bar">
+          <span>WAT Output</span>
+          <button id="copy" disabled>Copy</button>
+        </div>
+        <pre id="output" class="empty">Waiting for compiler.</pre>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const examples = {
+      fib: `int add(int a, int b)
+{
+    return a + b;
+}
+
+int fib(int n)
+{
+    if (n < 2)
+        return n;
+    return fib(n - 1) + fib(n - 2);
+}
+
+int answer(void)
+{
+    return add(fib(6), 4);
+}
+`,
+      duff: `void duff_copy(char *to, char *from, int count)
+{
+    int n = (count + 7) / 8;
+
+    switch (count % 8) {
+    case 0:
+        do {
+            *to++ = *from++;
+    case 7:
+            *to++ = *from++;
+    case 6:
+            *to++ = *from++;
+    case 5:
+            *to++ = *from++;
+    case 4:
+            *to++ = *from++;
+    case 3:
+            *to++ = *from++;
+    case 2:
+            *to++ = *from++;
+    case 1:
+            *to++ = *from++;
+        } while (--n > 0);
+    }
+}
+`
+    };
+
+    const statusEl = document.getElementById("status");
+    const sourceEl = document.getElementById("source");
+    const outputEl = document.getElementById("output");
+    const compileButton = document.getElementById("compile");
+    const copyButton = document.getElementById("copy");
+    const exampleSelect = document.getElementById("example");
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const embeddedWasmBase64 = "__TCC_BROWSER_BARE_WASM_BASE64__";
+    let wasm;
+    let memory;
+
+    function setStatus(text, isError) {
+      statusEl.textContent = text;
+      statusEl.classList.toggle("error", Boolean(isError));
+    }
+
+    function setOutput(text, isEmpty) {
+      outputEl.textContent = text;
+      outputEl.classList.toggle("empty", Boolean(isEmpty));
+      copyButton.disabled = Boolean(isEmpty);
+    }
+
+    function exp(name) {
+      return wasm.exports[name] || wasm.exports["_" + name];
+    }
+
+    function memoryBytes() {
+      return new Uint8Array(memory.buffer);
+    }
+
+    function readString(ptr, len) {
+      if (!ptr || len <= 0)
+        return "";
+      return decoder.decode(memoryBytes().subarray(ptr, ptr + len));
+    }
+
+    function writeCString(text) {
+      const bytes = encoder.encode(text);
+      const malloc = exp("malloc");
+      const ptr = malloc(bytes.length + 1);
+      const mem = memoryBytes();
+      mem.set(bytes, ptr);
+      mem[ptr + bytes.length] = 0;
+      return ptr;
+    }
+
+    function storeU32(ptr, value) {
+      if (ptr)
+        new DataView(memory.buffer).setUint32(ptr, value, true);
+    }
+
+    function storeU64(ptr, value) {
+      if (ptr)
+        new DataView(memory.buffer).setBigUint64(ptr, BigInt(value), true);
+    }
+
+    function invoke(fn, ...args) {
+      const table = exp("__indirect_function_table");
+      const target = table && table.get(fn);
+      if (!target)
+        throw new Error(`bad indirect function ${fn}`);
+      return target(...args);
+    }
+
+    function compileSource() {
+      const malloc = exp("malloc");
+      const free = exp("free");
+      const compile = exp("tcc_bare_compile");
+      const outputPtr = exp("tcc_bare_output");
+      const outputLen = exp("tcc_bare_output_len");
+      const errorPtr = exp("tcc_bare_error");
+      const errorLen = exp("tcc_bare_error_len");
+      if (!malloc || !free || !compile)
+        throw new Error("compiler exports are missing");
+
+      compileButton.disabled = true;
+      setStatus("Compiling");
+      const src = writeCString(sourceEl.value);
+      try {
+        const rc = compile(src);
+        if (rc === 0) {
+          setOutput(readString(outputPtr(), outputLen()), false);
+          setStatus("Compiled");
+        } else {
+          setOutput(readString(errorPtr(), errorLen()) || "Compilation failed.", false);
+          setStatus("Compile failed", true);
+        }
+      } finally {
+        free(src);
+        compileButton.disabled = false;
+      }
+    }
+
+    function makeImports() {
+      const text = [];
+      const enosys = -52;
+      const wasi = {
+        fd_write(fd, iovs, iovsLen, nwritten) {
+          let written = 0;
+          const view = new DataView(memory.buffer);
+          for (let i = 0; i < iovsLen; ++i) {
+            const ptr = view.getUint32(iovs + i * 8, true);
+            const len = view.getUint32(iovs + i * 8 + 4, true);
+            written += len;
+            text.push(readString(ptr, len));
+          }
+          if (nwritten)
+            view.setUint32(nwritten, written, true);
+          if (fd === 2)
+            console.error(text.join(""));
+          else
+            console.log(text.join(""));
+          text.length = 0;
+          return 0;
+        },
+        fd_close() { return 0; },
+        fd_seek(fd, offset, whence, newOffset) {
+          storeU64(newOffset, 0);
+          return 0;
+        },
+        fd_read(fd, iovs, iovsLen, nread) {
+          storeU32(nread, 0);
+          return 0;
+        },
+        path_open() { return 44; },
+        proc_exit(code) { throw new Error(`proc_exit(${code})`); },
+        environ_sizes_get(count, size) {
+          storeU32(count, 0);
+          storeU32(size, 0);
+          return 0;
+        },
+        environ_get() { return 0; },
+        clock_time_get(clockId, precision, timePtr) {
+          storeU64(timePtr, BigInt(Date.now()) * 1000000n);
+          return 0;
+        },
+        random_get(ptr, len) {
+          const bytes = memoryBytes().subarray(ptr, ptr + len);
+          if (globalThis.crypto && crypto.getRandomValues) {
+            crypto.getRandomValues(bytes);
+          } else {
+            for (let i = 0; i < bytes.length; ++i)
+              bytes[i] = Math.floor(Math.random() * 256);
+          }
+          return 0;
+        }
+      };
+      return {
+        env: {
+          emscripten_notify_memory_growth() {},
+          __syscall_getcwd() { return enosys; },
+          __syscall_readlinkat() { return enosys; },
+          _emscripten_throw_longjmp() { throw new Error("longjmp"); },
+          invoke_ii: (fn, a) => invoke(fn, a),
+          invoke_iii: (fn, a, b) => invoke(fn, a, b),
+          invoke_iiii: (fn, a, b, c) => invoke(fn, a, b, c),
+          invoke_iiiiii: (fn, a, b, c, d, e) => invoke(fn, a, b, c, d, e),
+          invoke_iiiiiiii: (fn, a, b, c, d, e, f, g) => invoke(fn, a, b, c, d, e, f, g),
+          invoke_v: fn => { invoke(fn); },
+          invoke_vi: (fn, a) => { invoke(fn, a); },
+          invoke_vii: (fn, a, b) => { invoke(fn, a, b); },
+          invoke_viii: (fn, a, b, c) => { invoke(fn, a, b, c); },
+          invoke_viiii: (fn, a, b, c, d) => { invoke(fn, a, b, c, d); },
+          invoke_viiiii: (fn, a, b, c, d, e) => { invoke(fn, a, b, c, d, e); }
+        },
+        wasi_snapshot_preview1: wasi
+      };
+    }
+
+    function decodeBase64(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; ++i)
+        bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+
+    async function loadWasmBytes() {
+      if (embeddedWasmBase64 && !embeddedWasmBase64.startsWith("__TCC_"))
+        return decodeBase64(embeddedWasmBase64);
+      const response = await fetch("tcc-browser-bare.wasm");
+      return response.arrayBuffer();
+    }
+
+    async function boot() {
+      sourceEl.value = examples.fib;
+      const bytes = await loadWasmBytes();
+      const instance = await WebAssembly.instantiate(bytes, makeImports());
+      wasm = instance.instance || instance;
+      memory = wasm.exports.memory;
+      if (wasm.exports._initialize)
+        wasm.exports._initialize();
+      else if (wasm.exports.__wasm_call_ctors)
+        wasm.exports.__wasm_call_ctors();
+      compileButton.disabled = false;
+      setStatus("Ready");
+      compileSource();
+    }
+
+    exampleSelect.addEventListener("change", () => {
+      sourceEl.value = examples[exampleSelect.value] || examples.fib;
+      compileSource();
+    });
+    compileButton.addEventListener("click", compileSource);
+    copyButton.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(outputEl.textContent);
+      setStatus("Copied");
+    });
+
+    boot().catch(err => {
+      setOutput(err && err.stack ? err.stack : String(err), false);
+      setStatus("Runtime error", true);
+    });
+  </script>
+</body>
+</html>

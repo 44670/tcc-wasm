@@ -19,6 +19,16 @@ Currently working:
   checks important WAT shape properties
 - `make wasm-demo`, which builds `web/tcc-wasm-demo.html`: a single-file
   browser UI where TCC itself runs as wasm and emits wasm32 WAT from C source
+- `make wasm-bare-demo`, which builds a single-file
+  `web/tcc-wasm-bare.html`: the same hosted compiler without Emscripten's
+  generated JS runtime, MEMFS, `Module`, or `ccall`
+- `make wasm-bare-test`, which instantiates the bare hosted compiler wasm
+  directly in Node and compiles fib, Duff's device, and a negative diagnostic
+  case through the exported C ABI
+- `make wasm-libc`, which builds `libc.wasm` from `lib/wasm32-libc.c` using
+  `wasm32-tcc` and `wasm-as`
+- `make wasm-libc-test`, which instantiates `libc.wasm` directly in Node and
+  tests allocation plus 1MB buffered stdin/stdout/stderr hooks
 - i32 integer scalars, pointers, char/short loads and stores
 - direct calls and i32 scalar function returns
 - function pointers through a wasm table and `call_indirect`
@@ -57,6 +67,10 @@ Known unsupported areas are intentionally explicit in `wasm32-gen.c`:
   are acceptable until imports/runtime/linking are designed.
 - Keep the browser demo honest: Emscripten may host the compiler, but the
   user's C input must still be compiled by this backend, not by Emscripten.
+- Keep browser hosting layered. Emscripten may compile TCC itself to wasm, but
+  the default durable host ABI should be plain wasm exports plus a small,
+  documented import object; the generated Emscripten JS runtime is optional
+  compatibility glue, not the compiler interface.
 - Add tests with every semantic expansion. A feature is not "supported" until a
   `.c -> .wat -> wasm-as -> node` check exercises it.
 
@@ -277,8 +291,10 @@ Acceptance tests:
 
 ### 7. Browser Demo and Runtime Hosting
 
-The browser demo is a product surface for the backend, not a separate compiler
-path:
+The browser demos are product surfaces for the backend, not separate compiler
+paths.
+
+Legacy single-file host:
 
 - `web/tcc_browser.c` embeds the normal TCC CLI compiled by Emscripten.
 - The page writes `/input.c` into MEMFS and calls
@@ -291,10 +307,35 @@ path:
   browser compiles do not retain old functions, indirect-call types, or WAT ops.
 - The hosted compiler uses a fixed 256MB Emscripten memory with growth disabled.
 
+Bare wasm host:
+
+- `web/tcc_browser_bare.c` embeds TCC through `tcc.c`, but exports a direct C
+  ABI: `tcc_bare_compile`, `tcc_bare_output`, `tcc_bare_output_len`,
+  `tcc_bare_error`, and `tcc_bare_error_len`.
+- `web/tcc-wasm-bare-shell.html` is the editable source. `make
+  wasm-bare-demo` compiles `web/tcc-browser-bare.wasm` and embeds it as base64
+  into the generated single-file `web/tcc-wasm-bare.html`.
+- The generated page instantiates the embedded bytes directly with
+  `WebAssembly.instantiate`, copies C source bytes into linear memory with
+  exported `malloc`/`free`, and reads WAT/diagnostic bytes back by pointer and
+  length.
+- The bare host is built with `--no-entry`, `STANDALONE_WASM=1`,
+  `FILESYSTEM=0`, fixed 256MB memory, and wasm-native longjmp
+  (`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`). This removes the generated
+  Emscripten JS runtime and avoids JS `invoke_*` longjmp imports.
+- The remaining imports are small WASI/env shims for libc edges that TCC still
+  reaches, such as stdio writes, time, empty environment, and filesystem
+  syscalls that currently return `-ENOSYS`.
+- Output uses `open_memstream` plus `tcc_output_wast_file`, so no MEMFS output
+  file is needed.
+
 Tasks:
 
 - Keep `web/tcc-wasm-shell.html` as the editable source for the UI and
   `web/tcc-wasm-demo.html` as generated output.
+- Keep `web/tcc-wasm-bare-shell.html` as the editable source and
+  `web/tcc-wasm-bare.html` plus `web/tcc-browser-bare.wasm` as generated
+  output.
 - Add a small smoke test that opens the generated HTML in headless Chromium and
   checks that the default fib example reaches `statusText == "Compiled"`.
 - Add a second browser smoke test for Duff's device to catch repeated-compile
@@ -303,6 +344,10 @@ Tasks:
   successful WAT.
 - Add a compact limitations drawer once the unsupported feature list becomes
   more useful to users than the current raw compiler errors.
+- If older browser compatibility becomes necessary, either keep the checked-in
+  JS `invoke_*` fallback imports in the bare host or add a second non-EH build
+  target. Do not silently switch the primary target back to Emscripten JS
+  longjmp glue.
 
 Runtime-hosting design for larger C programs:
 
@@ -318,6 +363,24 @@ Runtime-hosting design for larger C programs:
 - Start with imported memory mode:
   `(import "env" "memory" (memory 4096 4096))`, then add exports/imports only
   through documented symbols.
+
+Standalone runtime provider:
+
+- `lib/wasm32-libc.c` is compiled by this backend, not Emscripten. It is the
+  bootstrap provider for `libc.wasm`.
+- The first provider exports `malloc`, `free`, `realloc`, `calloc`, `memset`,
+  `memcpy`, `memmove`, `memcmp`, string basics, and simple stdio entry points.
+- `stdin`, `stdout`, and `stderr` are internal fixed buffers with a 1MB capacity
+  each. Host code can seed stdin through `rt_stdin_set`/`rt_stdin_append`, read
+  captured output through `rt_stdout_ptr` plus `rt_stdout_len`, and reset state
+  through `rt_stdio_reset`.
+- `read`, `write`, `getchar`, `putchar`, and `puts` are non-vararg wrappers over
+  those buffers. Full `printf` should wait for the typed value layer and varargs
+  ABI instead of inventing a separate calling convention.
+- The current provider owns its own memory. The next step is a linked-provider
+  mode where user modules import `env.memory` and import runtime functions from
+  this provider, with a hard layout ceiling that keeps user data below the
+  runtime/global-base region.
 
 ### 8. Varargs and VLA
 
@@ -367,6 +430,8 @@ The backend has a repeatable test command:
 - `make wasm-test`
 - implementation: `tests/wasm32/run.sh`
 - assertions: `tests/wasm32/assert.js`
+- bare browser host smoke: `make wasm-bare-test`
+- runtime provider smoke: `make wasm-libc-test`
 
 The harness currently:
 
@@ -400,6 +465,10 @@ Harness tasks:
 - Add a mode that compares checked-in `tests/wasm32/*.wat` against freshly
   generated output, so WAT shape changes are intentional.
 - Add browser smoke tests for `web/tcc-wasm-demo.html`.
+- Extend `wasm-bare-test` to run in a real browser after the direct Node
+  instantiation path is stable.
+- Add user-module import tests once the backend can emit imported memory and
+  unresolved function imports against `libc.wasm`.
 
 ## Near-Term Priority Order
 
@@ -411,7 +480,8 @@ Harness tasks:
    records in `WasmOp`.
 6. Broaden structured CFG lowering beyond straight-line and simple if/else.
 7. Add imports for unresolved functions and runtime services.
-8. Add browser smoke tests for `web/tcc-wasm-demo.html`.
+8. Add browser smoke tests for `web/tcc-wasm-demo.html` and the generated
+   `web/tcc-wasm-bare.html`.
 9. Implement varargs.
 10. Implement VLA.
 11. Implement computed goto.

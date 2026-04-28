@@ -1748,6 +1748,7 @@ ST_FUNC int tcc_load_coff(TCCState * s1, int fd);
 
 /* ------------ wasm32-link.c ------------ */
 #ifdef TCC_TARGET_WASM32
+ST_FUNC int tcc_output_wast_file(TCCState *s1, FILE *f);
 ST_FUNC int tcc_output_wast(TCCState *s1, const char *filename);
 #endif
 
