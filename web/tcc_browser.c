@@ -25,6 +25,7 @@ static void tcc_browser_reset_wasm32(void)
         for (j = 0; j < fn->nb_ops; ++j) {
             tcc_free(fn->ops[j].cond);
             tcc_free(fn->ops[j].text);
+            tcc_free(fn->ops[j].env);
         }
         tcc_free(fn->ops);
         tcc_free(fn);
@@ -35,9 +36,11 @@ static void tcc_browser_reset_wasm32(void)
 
     wasm32_forget_all_reg_exprs();
     dynarray_reset(&wasm32_types, &nb_wasm32_types);
+    wasm32_free_imports();
     wasm32_memory_end = 0;
     wasm32_stack_top = 0;
     wasm32_cur_func = NULL;
+    wasm32_needs_sjlj = 0;
 #endif
 }
 

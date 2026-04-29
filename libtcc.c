@@ -1466,6 +1466,14 @@ static int tcc_set_linker(TCCState *s, const char *optarg)
             tcc_set_str(&s->elfint, o.arg);
         } else if (link_option(&o, "enable-new-dtags")) {
             s->enable_new_dtags = 1;
+#ifdef TCC_TARGET_WASM32
+        } else if (link_option(&o, "wasm-libc")) {
+            s->wasm_link_mode = 1;
+        } else if (link_option(&o, "wasm-app")) {
+            s->wasm_link_mode = 2;
+        } else if (link_option(&o, "wasm-heap-end=")) {
+            s->wasm_heap_end = strtoull(o.arg, &end, 0);
+#endif
         } else if (link_option(&o, "section-alignment=")) {
             s->section_align = strtoul(o.arg, &end, 16);
         } else if (link_option(&o, "soname=") || link_option(&o, "install_name=")) {

@@ -8,18 +8,52 @@
  */
 
 typedef unsigned int size_t;
+typedef __builtin_va_list va_list;
+
+#define va_start(ap, last) __builtin_va_start(ap, last)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+#define va_end(ap) (void)(ap)
+#define va_copy(dst, src) ((dst) = (src))
 
 #define RT_STDIN 0
 #define RT_STDOUT 1
 #define RT_STDERR 2
+#define RT_FILE_MEM 3
 
+#define RT_ENOENT  (-2)
 #define RT_EBADF  (-9)
 #define RT_EINVAL (-22)
 #define RT_ENOSPC (-28)
+#define RT_ENOSYS (-52)
 
 #define RT_STDIO_CAP 1048576u
-#define RT_HEAP_CAP 16777216u
 #define RT_NULL (~0u)
+#define RT_FMT_TO_BUFFER 0
+#define RT_FMT_TO_STDOUT 1
+#define RT_FMT_TO_STDERR 2
+
+#define EOF (-1)
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#define RAND_MAX 2147483647
+#define CLOCKS_PER_SEC 1000
+
+struct __wasm_FILE {
+    int fd;
+    int eof;
+    int err;
+    int has_ungot;
+    unsigned char ungot;
+    unsigned char *buf;
+    size_t len;
+    size_t pos;
+    size_t cap;
+    int writable;
+    char *path;
+};
+
+typedef struct __wasm_FILE FILE;
 
 struct RtBlock {
     size_t size;
@@ -27,20 +61,59 @@ struct RtBlock {
     int free;
 };
 
-static unsigned char rt_stdin_buf[RT_STDIO_CAP];
-static unsigned char rt_stdout_buf[RT_STDIO_CAP];
-static unsigned char rt_stderr_buf[RT_STDIO_CAP];
+struct RtFileData {
+    char *path;
+    unsigned char *data;
+    size_t len;
+    struct RtFileData *next;
+};
+
+static unsigned char *rt_stdin_buf;
+static unsigned char *rt_stdout_buf;
+static unsigned char *rt_stderr_buf;
 static size_t rt_stdin_len;
 static size_t rt_stdin_pos;
 static size_t rt_stdout_used;
 static size_t rt_stderr_used;
 
-static unsigned char rt_heap[RT_HEAP_CAP];
+static size_t rt_heap_start;
+static size_t rt_heap_end;
+static size_t rt_heap_first;
 static int rt_heap_ready;
+static int rt_errno;
+static int rt_stdio_hosted;
+static unsigned rt_rand_state = 1;
+static FILE rt_file_stdin = { RT_STDIN, 0, 0, 0, 0 };
+static FILE rt_file_stdout = { RT_STDOUT, 0, 0, 0, 0 };
+static FILE rt_file_stderr = { RT_STDERR, 0, 0, 0, 0 };
+static struct RtFileData *rt_files;
+
+int rt_write(int fd, const void *src, size_t len);
+int rt_host_read(int fd, void *dst, size_t len);
+int rt_host_write(int fd, const void *src, size_t len);
+int rt_host_isatty(int fd);
+void rt_host_exit(int code);
+int vsnprintf(char *dst, size_t n, const char *fmt, va_list ap);
+int vsscanf(const char *src, const char *fmt, va_list ap);
+
+int *__errno_location(void)
+{
+    return &rt_errno;
+}
 
 static size_t rt_align8(size_t n)
 {
     return (n + 7u) & ~7u;
+}
+
+static size_t rt_align8_down(size_t n)
+{
+    return n & ~7u;
+}
+
+static size_t rt_block_header_size(void)
+{
+    return rt_align8(sizeof(struct RtBlock));
 }
 
 void *memset(void *dst, int c, size_t n)
@@ -129,72 +202,211 @@ int strncmp(const char *a, const char *b, size_t n)
     return 0;
 }
 
-static struct RtBlock *rt_block_at(size_t off)
+void *memchr(const void *s, int c, size_t n)
 {
-    return (struct RtBlock *)(rt_heap + off);
+    const unsigned char *p = s;
+    size_t i;
+    for (i = 0; i < n; ++i)
+        if (p[i] == (unsigned char)c)
+            return (void *)(p + i);
+    return 0;
 }
 
-static void rt_heap_init(void)
+char *strncpy(char *dst, const char *src, size_t n)
 {
-    struct RtBlock *b;
-    if (rt_heap_ready)
-        return;
-    b = rt_block_at(0);
-    b->size = RT_HEAP_CAP - sizeof(struct RtBlock);
-    b->next = RT_NULL;
-    b->free = 1;
-    rt_heap_ready = 1;
+    size_t i;
+    for (i = 0; i < n && src[i]; ++i)
+        dst[i] = src[i];
+    for (; i < n; ++i)
+        dst[i] = 0;
+    return dst;
 }
 
-static void rt_heap_split(size_t off, size_t size)
+char *strcat(char *dst, const char *src)
 {
-    struct RtBlock *b = rt_block_at(off);
+    strcpy(dst + strlen(dst), src);
+    return dst;
+}
+
+char *strncat(char *dst, const char *src, size_t n)
+{
+    char *d = dst + strlen(dst);
+    size_t i;
+    for (i = 0; i < n && src[i]; ++i)
+        d[i] = src[i];
+    d[i] = 0;
+    return dst;
+}
+
+int strcoll(const char *a, const char *b)
+{
+    return strcmp(a, b);
+}
+
+char *strchr(const char *s, int c)
+{
+    unsigned char ch = (unsigned char)c;
+    for (;; ++s) {
+        if ((unsigned char)*s == ch)
+            return (char *)s;
+        if (!*s)
+            return 0;
+    }
+}
+
+char *strrchr(const char *s, int c)
+{
+    const char *last = 0;
+    unsigned char ch = (unsigned char)c;
+    for (;; ++s) {
+        if ((unsigned char)*s == ch)
+            last = s;
+        if (!*s)
+            return (char *)last;
+    }
+}
+
+char *strstr(const char *haystack, const char *needle)
+{
+    size_t nlen = strlen(needle);
+    if (nlen == 0)
+        return (char *)haystack;
+    while (*haystack) {
+        if (*haystack == *needle && !strncmp(haystack, needle, nlen))
+            return (char *)haystack;
+        ++haystack;
+    }
+    return 0;
+}
+
+char *strpbrk(const char *s, const char *accept)
+{
+    for (; *s; ++s)
+        if (strchr(accept, *s))
+            return (char *)s;
+    return 0;
+}
+
+size_t strspn(const char *s, const char *accept)
+{
+    size_t n = 0;
+    while (s[n] && strchr(accept, s[n]))
+        ++n;
+    return n;
+}
+
+size_t strcspn(const char *s, const char *reject)
+{
+    size_t n = 0;
+    while (s[n] && !strchr(reject, s[n]))
+        ++n;
+    return n;
+}
+
+char *strerror(int errnum)
+{
+    switch (errnum) {
+    case 0: return "success";
+    case 2: return "no such file";
+    case 5: return "i/o error";
+    case 9: return "bad file descriptor";
+    case 12: return "out of memory";
+    case 22: return "invalid argument";
+    case 28: return "no space";
+    case 52: return "not implemented";
+    default: return "error";
+    }
+}
+
+static int rt_ascii(int c)
+{
+    return c & 255;
+}
+
+int isdigit(int c) { c = rt_ascii(c); return c >= '0' && c <= '9'; }
+int islower(int c) { c = rt_ascii(c); return c >= 'a' && c <= 'z'; }
+int isupper(int c) { c = rt_ascii(c); return c >= 'A' && c <= 'Z'; }
+int isalpha(int c) { return islower(c) || isupper(c); }
+int isalnum(int c) { return isalpha(c) || isdigit(c); }
+int iscntrl(int c) { c = rt_ascii(c); return c < 32 || c == 127; }
+int isspace(int c) { c = rt_ascii(c); return c == ' ' || (c >= '\t' && c <= '\r'); }
+int isxdigit(int c) { c = rt_ascii(c); return isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+int ispunct(int c) { c = rt_ascii(c); return c > 32 && c < 127 && !isalnum(c); }
+int tolower(int c) { return isupper(c) ? c + ('a' - 'A') : c; }
+int toupper(int c) { return islower(c) ? c - ('a' - 'A') : c; }
+
+static struct RtBlock *rt_block_at(size_t addr)
+{
+    return (struct RtBlock *)addr;
+}
+
+static void rt_heap_reset(void)
+{
+    rt_stdin_buf = 0;
+    rt_stdout_buf = 0;
+    rt_stderr_buf = 0;
+    rt_stdin_len = 0;
+    rt_stdin_pos = 0;
+    rt_stdout_used = 0;
+    rt_stderr_used = 0;
+    rt_heap_start = 0;
+    rt_heap_end = 0;
+    rt_heap_first = 0;
+    rt_heap_ready = 0;
+}
+
+static void rt_heap_split(size_t addr, size_t size)
+{
+    struct RtBlock *b = rt_block_at(addr);
     struct RtBlock *n;
-    size_t n_off;
+    size_t hdr = rt_block_header_size();
+    size_t n_addr;
 
-    if (b->size < size + sizeof(struct RtBlock) + 8u)
+    if (b->size < size + hdr + 8u)
         return;
-    n_off = off + sizeof(struct RtBlock) + size;
-    n = rt_block_at(n_off);
-    n->size = b->size - size - sizeof(struct RtBlock);
+    n_addr = addr + hdr + size;
+    n = rt_block_at(n_addr);
+    n->size = b->size - size - hdr;
     n->next = b->next;
     n->free = 1;
     b->size = size;
-    b->next = n_off;
+    b->next = n_addr;
 }
 
 static void rt_heap_coalesce(void)
 {
-    size_t off = 0;
+    size_t addr = rt_heap_first;
 
-    while (off != RT_NULL) {
-        struct RtBlock *b = rt_block_at(off);
+    while (addr != RT_NULL) {
+        struct RtBlock *b = rt_block_at(addr);
         if (b->free && b->next != RT_NULL) {
             struct RtBlock *n = rt_block_at(b->next);
             if (n->free) {
-                b->size += sizeof(struct RtBlock) + n->size;
+                b->size += rt_block_header_size() + n->size;
                 b->next = n->next;
                 continue;
             }
         }
-        off = b->next;
+        addr = b->next;
     }
 }
 
 void *malloc(size_t size)
 {
-    size_t off;
+    size_t addr;
+    size_t hdr = rt_block_header_size();
 
-    rt_heap_init();
+    if (!rt_heap_ready)
+        return 0;
     if (size == 0)
         size = 1;
     size = rt_align8(size);
-    for (off = 0; off != RT_NULL; off = rt_block_at(off)->next) {
-        struct RtBlock *b = rt_block_at(off);
+    for (addr = rt_heap_first; addr != RT_NULL; addr = rt_block_at(addr)->next) {
+        struct RtBlock *b = rt_block_at(addr);
         if (b->free && b->size >= size) {
-            rt_heap_split(off, size);
+            rt_heap_split(addr, size);
             b->free = 0;
-            return rt_heap + off + sizeof(struct RtBlock);
+            return (void *)(addr + hdr);
         }
     }
     return 0;
@@ -202,16 +414,16 @@ void *malloc(size_t size)
 
 void free(void *ptr)
 {
-    size_t off;
+    size_t addr;
     struct RtBlock *b;
 
-    if (!ptr)
+    if (!ptr || !rt_heap_ready)
         return;
-    off = (size_t)((unsigned char *)ptr - rt_heap);
-    if (off < sizeof(struct RtBlock) || off >= RT_HEAP_CAP)
+    addr = (size_t)ptr;
+    if (addr < rt_heap_start + rt_block_header_size() || addr >= rt_heap_end)
         return;
-    off -= sizeof(struct RtBlock);
-    b = rt_block_at(off);
+    addr -= rt_block_header_size();
+    b = rt_block_at(addr);
     b->free = 1;
     rt_heap_coalesce();
 }
@@ -233,6 +445,7 @@ void *calloc(size_t nmemb, size_t size)
 void *realloc(void *ptr, size_t size)
 {
     size_t old_size;
+    size_t addr;
     void *new_ptr;
     struct RtBlock *b;
 
@@ -242,14 +455,15 @@ void *realloc(void *ptr, size_t size)
         free(ptr);
         return 0;
     }
+    if (!rt_heap_ready)
+        return 0;
 
-    b = rt_block_at((size_t)((unsigned char *)ptr - rt_heap)
-                    - sizeof(struct RtBlock));
+    addr = (size_t)ptr - rt_block_header_size();
+    b = rt_block_at(addr);
     old_size = b->size;
     size = rt_align8(size);
     if (size <= old_size) {
-        rt_heap_split((size_t)((unsigned char *)ptr - rt_heap)
-                      - sizeof(struct RtBlock), size);
+        rt_heap_split(addr, size);
         return ptr;
     }
 
@@ -261,9 +475,50 @@ void *realloc(void *ptr, size_t size)
     return new_ptr;
 }
 
+int rt_init_heap(size_t start, size_t end)
+{
+    struct RtBlock *b;
+    size_t hdr = rt_block_header_size();
+
+    if (rt_heap_ready)
+        return RT_EINVAL;
+    start = rt_align8(start);
+    end = rt_align8_down(end);
+    if (end <= start + hdr + 3u * RT_STDIO_CAP)
+        return RT_EINVAL;
+
+    rt_heap_start = start;
+    rt_heap_end = end;
+    rt_heap_first = start;
+    b = rt_block_at(rt_heap_first);
+    b->size = end - start - hdr;
+    b->next = RT_NULL;
+    b->free = 1;
+    rt_heap_ready = 1;
+
+    rt_stdin_buf = malloc(RT_STDIO_CAP);
+    rt_stdout_buf = malloc(RT_STDIO_CAP);
+    rt_stderr_buf = malloc(RT_STDIO_CAP);
+    if (!rt_stdin_buf || !rt_stdout_buf || !rt_stderr_buf) {
+        rt_heap_reset();
+        return RT_ENOSPC;
+    }
+    return 0;
+}
+
+int rt_heap_initialized(void)
+{
+    return rt_heap_ready;
+}
+
 int rt_stdio_capacity(void)
 {
     return RT_STDIO_CAP;
+}
+
+static int rt_stdio_ready(void)
+{
+    return rt_stdin_buf && rt_stdout_buf && rt_stderr_buf;
 }
 
 void rt_stdio_reset(void)
@@ -272,12 +527,29 @@ void rt_stdio_reset(void)
     rt_stdin_pos = 0;
     rt_stdout_used = 0;
     rt_stderr_used = 0;
+    rt_file_stdin.eof = 0;
+    rt_file_stdin.err = 0;
+    rt_file_stdin.has_ungot = 0;
+    rt_file_stdout.err = 0;
+    rt_file_stderr.err = 0;
+}
+
+void rt_stdio_set_hosted(int hosted)
+{
+    rt_stdio_hosted = hosted != 0;
+}
+
+int rt_stdio_hosted_enabled(void)
+{
+    return rt_stdio_hosted;
 }
 
 static void rt_stdin_compact(void)
 {
     size_t remaining;
 
+    if (!rt_stdio_ready())
+        return;
     if (rt_stdin_pos == 0)
         return;
     if (rt_stdin_pos >= rt_stdin_len) {
@@ -293,6 +565,8 @@ static void rt_stdin_compact(void)
 
 int rt_stdin_set(const void *src, size_t len)
 {
+    if (!rt_stdio_ready())
+        return RT_EINVAL;
     if (!src && len)
         return RT_EINVAL;
     if (len > RT_STDIO_CAP)
@@ -306,6 +580,8 @@ int rt_stdin_set(const void *src, size_t len)
 
 int rt_stdin_append(const void *src, size_t len)
 {
+    if (!rt_stdio_ready())
+        return RT_EINVAL;
     if (!src && len)
         return RT_EINVAL;
     rt_stdin_compact();
@@ -319,6 +595,8 @@ int rt_stdin_append(const void *src, size_t len)
 
 int rt_stdin_remaining(void)
 {
+    if (!rt_stdio_ready())
+        return 0;
     return (int)(rt_stdin_len - rt_stdin_pos);
 }
 
@@ -352,12 +630,107 @@ void rt_stderr_clear(void)
     rt_stderr_used = 0;
 }
 
+static char *rt_strdup_n(const char *s, size_t len)
+{
+    char *p = malloc(len + 1);
+    if (!p)
+        return 0;
+    if (len)
+        memcpy(p, s, len);
+    p[len] = 0;
+    return p;
+}
+
+static struct RtFileData *rt_file_find(const char *path)
+{
+    struct RtFileData *it;
+
+    if (!path)
+        return 0;
+    for (it = rt_files; it; it = it->next)
+        if (strcmp(it->path, path) == 0)
+            return it;
+    return 0;
+}
+
+static int rt_file_store(const char *path, const void *src, size_t len)
+{
+    struct RtFileData *file;
+    unsigned char *data;
+
+    if (!path)
+        return RT_EINVAL;
+    file = rt_file_find(path);
+    if (!file) {
+        file = malloc(sizeof *file);
+        if (!file)
+            return RT_ENOSPC;
+        memset(file, 0, sizeof *file);
+        file->path = rt_strdup_n(path, strlen(path));
+        if (!file->path) {
+            free(file);
+            return RT_ENOSPC;
+        }
+        file->next = rt_files;
+        rt_files = file;
+    }
+    data = malloc(len ? len : 1);
+    if (!data)
+        return RT_ENOSPC;
+    if (len)
+        memcpy(data, src, len);
+    free(file->data);
+    file->data = data;
+    file->len = len;
+    return (int)len;
+}
+
+int rt_file_add(const char *path, const void *src, size_t len)
+{
+    return rt_file_store(path, src, len);
+}
+
+static int rt_file_append(FILE *f, const void *src, size_t len)
+{
+    unsigned char *p;
+    size_t cap;
+
+    if (!f || !f->writable)
+        return RT_EBADF;
+    if (!src && len)
+        return RT_EINVAL;
+    if (len > ((size_t)-1) - f->len)
+        return RT_ENOSPC;
+    if (f->len + len > f->cap) {
+        cap = f->cap ? f->cap : 64;
+        while (cap < f->len + len) {
+            if (cap > ((size_t)-1) / 2) {
+                cap = f->len + len;
+                break;
+            }
+            cap *= 2;
+        }
+        p = realloc(f->buf, cap);
+        if (!p)
+            return RT_ENOSPC;
+        f->buf = p;
+        f->cap = cap;
+    }
+    if (len)
+        memcpy(f->buf + f->len, src, len);
+    f->len += len;
+    f->pos = f->len;
+    return (int)len;
+}
+
 static int rt_buffer_write(unsigned char *buf, size_t *buf_len,
                            const void *src, size_t len)
 {
     size_t room;
     size_t n;
 
+    if (!buf)
+        return RT_EINVAL;
     if (!src && len)
         return RT_EINVAL;
     room = RT_STDIO_CAP - *buf_len;
@@ -372,11 +745,597 @@ static int rt_buffer_write(unsigned char *buf, size_t *buf_len,
     return (int)n;
 }
 
+struct RtFmtOut {
+    int mode;
+    char *buf;
+    size_t cap;
+    size_t len;
+    int error;
+};
+
+static void rt_fmt_putc(struct RtFmtOut *out, int ch)
+{
+    unsigned char c = (unsigned char)ch;
+
+    if (out->error)
+        return;
+    if (out->mode == RT_FMT_TO_STDOUT) {
+        if (rt_write(RT_STDOUT, &c, 1) != 1)
+            out->error = 1;
+    } else if (out->cap == RT_NULL) {
+        out->buf[out->len] = (char)c;
+    } else if (out->len + 1u < out->cap) {
+        out->buf[out->len] = (char)c;
+    }
+    ++out->len;
+}
+
+static void rt_fmt_write(struct RtFmtOut *out, const char *s, size_t len)
+{
+    size_t i;
+    for (i = 0; i < len; ++i)
+        rt_fmt_putc(out, s[i]);
+}
+
+static size_t rt_strnlen(const char *s, size_t max)
+{
+    size_t n = 0;
+    while (n < max && s[n])
+        ++n;
+    return n;
+}
+
+static int rt_is_digit(int c)
+{
+    return c >= '0' && c <= '9';
+}
+
+static int rt_is_space(int c)
+{
+    return c == ' ' || c == '\n' || c == '\r' || c == '\t'
+        || c == '\f' || c == '\v';
+}
+
+static int rt_digit_value(int c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+
+struct RtScanIn {
+    const char *buf;
+    size_t pos;
+    size_t start;
+    size_t len;
+    int bounded;
+};
+
+#define RT_SCAN_LEN_DEFAULT 0
+#define RT_SCAN_LEN_HH 1
+#define RT_SCAN_LEN_H 2
+#define RT_SCAN_LEN_L 3
+#define RT_SCAN_LEN_LL 4
+
+static int rt_scan_peek_at(struct RtScanIn *in, size_t off)
+{
+    size_t p = in->pos + off;
+    if (in->bounded) {
+        if (p >= in->len)
+            return -1;
+    } else if (in->buf[p] == 0) {
+        return -1;
+    }
+    return (unsigned char)in->buf[p];
+}
+
+static int rt_scan_peek(struct RtScanIn *in)
+{
+    return rt_scan_peek_at(in, 0);
+}
+
+static int rt_scan_get(struct RtScanIn *in)
+{
+    int c = rt_scan_peek(in);
+    if (c >= 0)
+        ++in->pos;
+    return c;
+}
+
+static void rt_scan_skip_space(struct RtScanIn *in)
+{
+    while (rt_is_space(rt_scan_peek(in)))
+        ++in->pos;
+}
+
+static int rt_scan_finish(struct RtScanIn *in, int assigned)
+{
+    if (assigned == 0 && rt_scan_peek(in) < 0)
+        return -1;
+    return assigned;
+}
+
+static int rt_scan_parse_number(struct RtScanIn *in, int spec, int width,
+                                unsigned int *out, int *negative)
+{
+    size_t token_start = in->pos;
+    int limit = width > 0 ? width : 0x7fffffff;
+    int base;
+    int digits = 0;
+    unsigned int value = 0;
+    int c;
+    int d;
+
+    *negative = 0;
+    if (limit <= 0)
+        return 0;
+
+    c = rt_scan_peek(in);
+    if ((c == '-' || c == '+') && limit > 0) {
+        *negative = c == '-';
+        ++in->pos;
+        --limit;
+    }
+
+    if (spec == 'o') {
+        base = 8;
+    } else if (spec == 'x' || spec == 'X' || spec == 'p') {
+        base = 16;
+        if (limit >= 3 && rt_scan_peek_at(in, 0) == '0'
+            && (rt_scan_peek_at(in, 1) == 'x'
+                || rt_scan_peek_at(in, 1) == 'X')
+            && rt_digit_value(rt_scan_peek_at(in, 2)) >= 0
+            && rt_digit_value(rt_scan_peek_at(in, 2)) < 16) {
+            in->pos += 2;
+            limit -= 2;
+        }
+    } else if (spec == 'i') {
+        base = 10;
+        if (limit >= 1 && rt_scan_peek_at(in, 0) == '0') {
+            base = 8;
+            if (limit >= 3 && (rt_scan_peek_at(in, 1) == 'x'
+                               || rt_scan_peek_at(in, 1) == 'X')
+                && rt_digit_value(rt_scan_peek_at(in, 2)) >= 0
+                && rt_digit_value(rt_scan_peek_at(in, 2)) < 16) {
+                base = 16;
+                in->pos += 2;
+                limit -= 2;
+            }
+        }
+    } else {
+        base = 10;
+    }
+
+    while (limit > 0) {
+        c = rt_scan_peek(in);
+        d = rt_digit_value(c);
+        if (d < 0 || d >= base)
+            break;
+        value = value * (unsigned int)base + (unsigned int)d;
+        ++in->pos;
+        --limit;
+        ++digits;
+    }
+
+    if (digits == 0) {
+        in->pos = token_start;
+        return 0;
+    }
+    *out = *negative ? 0u - value : value;
+    return 1;
+}
+
+static void rt_scan_store_int(void *dst, int length, unsigned int value)
+{
+    if (length == RT_SCAN_LEN_HH) {
+        *(unsigned char *)dst = (unsigned char)value;
+    } else if (length == RT_SCAN_LEN_H) {
+        *(unsigned short *)dst = (unsigned short)value;
+    } else {
+        *(unsigned int *)dst = value;
+    }
+}
+
+static int rt_vscan(struct RtScanIn *in, const char *fmt, va_list ap)
+{
+    int assigned = 0;
+
+    while (*fmt) {
+        int suppress;
+        int width;
+        int length;
+        int spec;
+
+        if (rt_is_space(*fmt)) {
+            while (rt_is_space(*fmt))
+                ++fmt;
+            rt_scan_skip_space(in);
+            continue;
+        }
+
+        if (*fmt != '%') {
+            if (rt_scan_peek(in) != (unsigned char)*fmt)
+                return rt_scan_finish(in, assigned);
+            ++in->pos;
+            ++fmt;
+            continue;
+        }
+
+        ++fmt;
+        if (*fmt == '%') {
+            if (rt_scan_peek(in) != '%')
+                return rt_scan_finish(in, assigned);
+            ++in->pos;
+            ++fmt;
+            continue;
+        }
+
+        suppress = 0;
+        if (*fmt == '*') {
+            suppress = 1;
+            ++fmt;
+        }
+
+        width = 0;
+        while (rt_is_digit(*fmt)) {
+            width = width * 10 + *fmt - '0';
+            ++fmt;
+        }
+
+        length = RT_SCAN_LEN_DEFAULT;
+        if (*fmt == 'h') {
+            ++fmt;
+            if (*fmt == 'h') {
+                length = RT_SCAN_LEN_HH;
+                ++fmt;
+            } else {
+                length = RT_SCAN_LEN_H;
+            }
+        } else if (*fmt == 'l') {
+            ++fmt;
+            if (*fmt == 'l') {
+                length = RT_SCAN_LEN_LL;
+                ++fmt;
+            } else {
+                length = RT_SCAN_LEN_L;
+            }
+        } else {
+            while (*fmt == 'z' || *fmt == 't' || *fmt == 'j' || *fmt == 'L')
+                ++fmt;
+        }
+
+        spec = *fmt ? *fmt++ : 0;
+        if (spec != 'c' && spec != '[' && spec != 'n')
+            rt_scan_skip_space(in);
+
+        if (spec == 'd' || spec == 'i' || spec == 'u' || spec == 'x'
+            || spec == 'X' || spec == 'o' || spec == 'p') {
+            unsigned int value;
+            int negative;
+            if (!rt_scan_parse_number(in, spec, width, &value, &negative))
+                return rt_scan_finish(in, assigned);
+            if (!suppress) {
+                void *dst = va_arg(ap, void *);
+                if (spec == 'p')
+                    *(void **)dst = (void *)value;
+                else
+                    rt_scan_store_int(dst, length, value);
+                ++assigned;
+            }
+            continue;
+        }
+
+        if (spec == 's') {
+            char *dst = suppress ? 0 : va_arg(ap, char *);
+            int count = 0;
+            int limit = width > 0 ? width : 0x7fffffff;
+            while (limit > 0 && rt_scan_peek(in) >= 0
+                   && !rt_is_space(rt_scan_peek(in))) {
+                int c = rt_scan_get(in);
+                if (!suppress)
+                    dst[count] = (char)c;
+                ++count;
+                --limit;
+            }
+            if (count == 0)
+                return rt_scan_finish(in, assigned);
+            if (!suppress) {
+                dst[count] = 0;
+                ++assigned;
+            }
+            continue;
+        }
+
+        if (spec == 'c') {
+            char *dst = suppress ? 0 : va_arg(ap, char *);
+            int count = 0;
+            int limit = width > 0 ? width : 1;
+            while (count < limit) {
+                int c = rt_scan_get(in);
+                if (c < 0)
+                    return rt_scan_finish(in, assigned);
+                if (!suppress)
+                    dst[count] = (char)c;
+                ++count;
+            }
+            if (!suppress)
+                ++assigned;
+            continue;
+        }
+
+        if (spec == 'n') {
+            if (!suppress) {
+                void *dst = va_arg(ap, void *);
+                rt_scan_store_int(dst, length,
+                                  (unsigned int)(in->pos - in->start));
+            }
+            continue;
+        }
+
+        return rt_scan_finish(in, assigned);
+    }
+    return assigned;
+}
+
+static void rt_fmt_pad(struct RtFmtOut *out, int ch, int count)
+{
+    while (count-- > 0)
+        rt_fmt_putc(out, ch);
+}
+
+static int rt_uint_to_digits(char *buf, unsigned int value, unsigned int base,
+                             int upper)
+{
+    static const char lower_digits[] = "0123456789abcdef";
+    static const char upper_digits[] = "0123456789ABCDEF";
+    const char *digits = upper ? upper_digits : lower_digits;
+    int n = 0;
+
+    do {
+        buf[n++] = digits[value % base];
+        value /= base;
+    } while (value);
+    return n;
+}
+
+static void rt_fmt_number(struct RtFmtOut *out, unsigned int value,
+                          unsigned int base, int negative, int upper,
+                          int width, int precision, int left, int zero,
+                          int plus, int space, int alt, int pointer)
+{
+    char digits[32];
+    char prefix[3];
+    int digit_count;
+    int prefix_len = 0;
+    int zero_count;
+    int total;
+    int i;
+
+    prefix[0] = 0;
+    if (negative) {
+        prefix[prefix_len++] = '-';
+    } else if (plus) {
+        prefix[prefix_len++] = '+';
+    } else if (space) {
+        prefix[prefix_len++] = ' ';
+    }
+
+    if (pointer || (alt && value != 0 && (base == 16 || base == 8))) {
+        if (base == 16) {
+            prefix[prefix_len++] = '0';
+            prefix[prefix_len++] = upper ? 'X' : 'x';
+        } else if (base == 8) {
+            prefix[prefix_len++] = '0';
+        }
+    }
+
+    digit_count = 0;
+    if (!(precision == 0 && value == 0))
+        digit_count = rt_uint_to_digits(digits, value, base, upper);
+
+    zero_count = 0;
+    if (precision > digit_count)
+        zero_count = precision - digit_count;
+    total = prefix_len + zero_count + digit_count;
+
+    if (!left && !(zero && precision < 0))
+        rt_fmt_pad(out, ' ', width - total);
+    rt_fmt_write(out, prefix, (size_t)prefix_len);
+    if (!left && zero && precision < 0)
+        rt_fmt_pad(out, '0', width - total);
+    rt_fmt_pad(out, '0', zero_count);
+    for (i = digit_count - 1; i >= 0; --i)
+        rt_fmt_putc(out, digits[i]);
+    if (left)
+        rt_fmt_pad(out, ' ', width - total);
+}
+
+static int rt_vformat(struct RtFmtOut *out, const char *fmt, va_list ap)
+{
+    while (*fmt) {
+        int left;
+        int plus;
+        int space;
+        int alt;
+        int zero;
+        int width;
+        int precision;
+        int done;
+        int spec;
+
+        if (*fmt != '%') {
+            rt_fmt_putc(out, *fmt++);
+            continue;
+        }
+        ++fmt;
+        if (*fmt == '%') {
+            rt_fmt_putc(out, *fmt++);
+            continue;
+        }
+
+        left = plus = space = alt = zero = 0;
+        done = 0;
+        while (!done) {
+            if (*fmt == '-') {
+                left = 1;
+                ++fmt;
+            } else if (*fmt == '+') {
+                plus = 1;
+                ++fmt;
+            } else if (*fmt == ' ') {
+                space = 1;
+                ++fmt;
+            } else if (*fmt == '#') {
+                alt = 1;
+                ++fmt;
+            } else if (*fmt == '0') {
+                zero = 1;
+                ++fmt;
+            } else {
+                done = 1;
+            }
+        }
+        if (left)
+            zero = 0;
+
+        width = 0;
+        if (*fmt == '*') {
+            width = va_arg(ap, int);
+            if (width < 0) {
+                left = 1;
+                zero = 0;
+                width = -width;
+            }
+            ++fmt;
+        } else {
+            while (rt_is_digit(*fmt)) {
+                width = width * 10 + *fmt - '0';
+                ++fmt;
+            }
+        }
+
+        precision = -1;
+        if (*fmt == '.') {
+            ++fmt;
+            precision = 0;
+            if (*fmt == '*') {
+                precision = va_arg(ap, int);
+                if (precision < 0)
+                    precision = -1;
+                ++fmt;
+            } else {
+                while (rt_is_digit(*fmt)) {
+                    precision = precision * 10 + *fmt - '0';
+                    ++fmt;
+                }
+            }
+        }
+
+        while (*fmt == 'h' || *fmt == 'l' || *fmt == 'z' || *fmt == 't'
+               || *fmt == 'j' || *fmt == 'L')
+            ++fmt;
+
+        spec = *fmt ? *fmt++ : 0;
+        switch (spec) {
+        case 'd':
+        case 'i': {
+            int v = va_arg(ap, int);
+            unsigned int mag = v < 0 ? 0u - (unsigned int)v : (unsigned int)v;
+            rt_fmt_number(out, mag, 10, v < 0, 0, width, precision, left, zero,
+                          plus, space, 0, 0);
+            break;
+        }
+        case 'u':
+            rt_fmt_number(out, va_arg(ap, unsigned int), 10, 0, 0, width,
+                          precision, left, zero, 0, 0, 0, 0);
+            break;
+        case 'x':
+            rt_fmt_number(out, va_arg(ap, unsigned int), 16, 0, 0, width,
+                          precision, left, zero, 0, 0, alt, 0);
+            break;
+        case 'X':
+            rt_fmt_number(out, va_arg(ap, unsigned int), 16, 0, 1, width,
+                          precision, left, zero, 0, 0, alt, 0);
+            break;
+        case 'o':
+            rt_fmt_number(out, va_arg(ap, unsigned int), 8, 0, 0, width,
+                          precision, left, zero, 0, 0, alt, 0);
+            break;
+        case 'p':
+            rt_fmt_number(out, (unsigned int)va_arg(ap, void *), 16, 0, 0,
+                          width, precision < 0 ? 1 : precision, left, zero,
+                          0, 0, 0, 1);
+            break;
+        case 'c': {
+            int ch = va_arg(ap, int);
+            if (!left)
+                rt_fmt_pad(out, ' ', width - 1);
+            rt_fmt_putc(out, ch);
+            if (left)
+                rt_fmt_pad(out, ' ', width - 1);
+            break;
+        }
+        case 's': {
+            const char *s = va_arg(ap, const char *);
+            size_t len;
+            if (!s)
+                s = "(null)";
+            len = precision >= 0 ? rt_strnlen(s, (size_t)precision) : strlen(s);
+            if (!left)
+                rt_fmt_pad(out, ' ', width - (int)len);
+            rt_fmt_write(out, s, len);
+            if (left)
+                rt_fmt_pad(out, ' ', width - (int)len);
+            break;
+        }
+        case 'f':
+        case 'F': {
+            int v = va_arg(ap, int);
+            int prec = precision < 0 ? 6 : precision;
+            unsigned int mag = v < 0 ? 0u - (unsigned int)v : (unsigned int)v;
+            rt_fmt_number(out, mag, 10, v < 0, 0, width, -1, left, zero,
+                          plus, space, 0, 0);
+            if (prec > 0) {
+                rt_fmt_putc(out, '.');
+                rt_fmt_pad(out, '0', prec);
+            }
+            break;
+        }
+        case 'e':
+        case 'E':
+        case 'g':
+        case 'G': {
+            int v = va_arg(ap, int);
+            unsigned int mag = v < 0 ? 0u - (unsigned int)v : (unsigned int)v;
+            rt_fmt_number(out, mag, 10, v < 0, 0, width, -1, left, zero,
+                          plus, space, 0, 0);
+            break;
+        }
+        case 0:
+            --fmt;
+            break;
+        default:
+            rt_fmt_putc(out, '%');
+            rt_fmt_putc(out, spec);
+            break;
+        }
+    }
+    return out->error ? -1 : (int)out->len;
+}
+
 int rt_read(int fd, void *dst, size_t len)
 {
     size_t avail;
     size_t n;
 
+    if (rt_stdio_hosted)
+        return rt_host_read(fd, dst, len);
+    if (!rt_stdio_ready())
+        return RT_EINVAL;
     if (fd != RT_STDIN)
         return RT_EBADF;
     if (!dst && len)
@@ -393,6 +1352,8 @@ int rt_read(int fd, void *dst, size_t len)
 
 int rt_write(int fd, const void *src, size_t len)
 {
+    if (rt_stdio_hosted)
+        return rt_host_write(fd, src, len);
     if (fd == RT_STDOUT)
         return rt_buffer_write(rt_stdout_buf, &rt_stdout_used, src, len);
     if (fd == RT_STDERR)
@@ -459,4 +1420,732 @@ int rt_puts(const char *s)
 int puts(const char *s)
 {
     return rt_puts(s);
+}
+
+FILE *__wasm_stdin(void)
+{
+    return &rt_file_stdin;
+}
+
+FILE *__wasm_stdout(void)
+{
+    return &rt_file_stdout;
+}
+
+FILE *__wasm_stderr(void)
+{
+    return &rt_file_stderr;
+}
+
+int fgetc(FILE *f)
+{
+    unsigned char ch;
+    int r;
+
+    if (!f) {
+        rt_errno = RT_EBADF;
+        return EOF;
+    }
+    if (f->has_ungot) {
+        f->has_ungot = 0;
+        return f->ungot;
+    }
+    if (f->fd == RT_FILE_MEM) {
+        if (f->pos >= f->len) {
+            f->eof = 1;
+            return EOF;
+        }
+        f->eof = 0;
+        return f->buf[f->pos++];
+    }
+    r = rt_read(f->fd, &ch, 1);
+    if (r == 1) {
+        f->eof = 0;
+        return ch;
+    }
+    if (r == 0)
+        f->eof = 1;
+    else {
+        f->err = 1;
+        rt_errno = -r;
+    }
+    return EOF;
+}
+
+int fputc(int ch, FILE *f)
+{
+    unsigned char c = (unsigned char)ch;
+    int r;
+
+    if (!f) {
+        rt_errno = RT_EBADF;
+        return EOF;
+    }
+    if (f->fd == RT_FILE_MEM) {
+        r = rt_file_append(f, &c, 1);
+        if (r == 1)
+            return c;
+        f->err = 1;
+        if (r < 0)
+            rt_errno = -r;
+        return EOF;
+    }
+    r = rt_write(f->fd, &c, 1);
+    if (r == 1)
+        return c;
+    f->err = 1;
+    if (r < 0)
+        rt_errno = -r;
+    return EOF;
+}
+
+int ungetc(int ch, FILE *f)
+{
+    if (!f || ch == EOF)
+        return EOF;
+    f->ungot = (unsigned char)ch;
+    f->has_ungot = 1;
+    f->eof = 0;
+    return (unsigned char)ch;
+}
+
+char *fgets(char *s, int n, FILE *f)
+{
+    int i;
+    int c;
+
+    if (!s || n <= 0 || !f)
+        return 0;
+    for (i = 0; i < n - 1; ++i) {
+        c = fgetc(f);
+        if (c == EOF)
+            break;
+        s[i] = (char)c;
+        if (c == '\n') {
+            ++i;
+            break;
+        }
+    }
+    if (i == 0)
+        return 0;
+    s[i] = 0;
+    return s;
+}
+
+int fputs(const char *s, FILE *f)
+{
+    size_t len;
+    int r;
+
+    if (!s || !f)
+        return EOF;
+    len = strlen(s);
+    r = rt_write(f->fd, s, len);
+    if (r < 0 || (size_t)r != len) {
+        f->err = 1;
+        if (r < 0)
+            rt_errno = -r;
+        return EOF;
+    }
+    return 0;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f)
+{
+    unsigned char *p = ptr;
+    size_t total = size * nmemb;
+    size_t got = 0;
+    int c;
+
+    if (size == 0 || nmemb == 0)
+        return 0;
+    while (got < total) {
+        c = fgetc(f);
+        if (c == EOF)
+            break;
+        p[got++] = (unsigned char)c;
+    }
+    return got / size;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
+{
+    size_t total = size * nmemb;
+    int r;
+
+    if (size == 0 || nmemb == 0)
+        return 0;
+    if (!f)
+        return 0;
+    if (f->fd == RT_FILE_MEM) {
+        r = rt_file_append(f, ptr, total);
+        if (r < 0) {
+            f->err = 1;
+            rt_errno = -r;
+            return 0;
+        }
+        return ((size_t)r) / size;
+    }
+    r = rt_write(f->fd, ptr, total);
+    if (r < 0) {
+        f->err = 1;
+        rt_errno = -r;
+        return 0;
+    }
+    return ((size_t)r) / size;
+}
+
+int fflush(FILE *f)
+{
+    (void)f;
+    return 0;
+}
+
+int fclose(FILE *f)
+{
+    int r = 0;
+
+    if (!f)
+        return EOF;
+    if (f == &rt_file_stdin || f == &rt_file_stdout || f == &rt_file_stderr)
+        return 0;
+    if (f->fd == RT_FILE_MEM && f->writable && f->path) {
+        r = rt_file_store(f->path, f->buf, f->len);
+        if (r < 0) {
+            f->err = 1;
+            rt_errno = -r;
+        }
+    }
+    if (f->writable)
+        free(f->buf);
+    free(f->path);
+    free(f);
+    return r < 0 ? EOF : 0;
+}
+
+FILE *fopen(const char *path, const char *mode)
+{
+    FILE *f;
+    struct RtFileData *data;
+    int writable = 0;
+
+    if (!path || !mode) {
+        rt_errno = -RT_EINVAL;
+        return 0;
+    }
+    if (mode[0] == 'w' || mode[0] == 'a')
+        writable = 1;
+    f = malloc(sizeof *f);
+    if (!f) {
+        rt_errno = -RT_ENOSPC;
+        return 0;
+    }
+    memset(f, 0, sizeof *f);
+    f->fd = RT_FILE_MEM;
+    f->writable = writable;
+    if (writable) {
+        f->path = rt_strdup_n(path, strlen(path));
+        if (!f->path) {
+            free(f);
+            rt_errno = -RT_ENOSPC;
+            return 0;
+        }
+        return f;
+    }
+    data = rt_file_find(path);
+    if (!data) {
+        free(f);
+        rt_errno = -RT_ENOENT;
+        return 0;
+    }
+    f->buf = data->data;
+    f->len = data->len;
+    f->cap = data->len;
+    return f;
+}
+
+FILE *freopen(const char *path, const char *mode, FILE *f)
+{
+    (void)path;
+    (void)mode;
+    return f;
+}
+
+FILE *tmpfile(void)
+{
+    rt_errno = -RT_ENOSYS;
+    return 0;
+}
+
+char *tmpnam(char *s)
+{
+    static char name[] = "tmp";
+    if (s)
+        return strcpy(s, name);
+    return name;
+}
+
+int remove(const char *path)
+{
+    (void)path;
+    rt_errno = -RT_ENOSYS;
+    return -1;
+}
+
+int rename(const char *oldpath, const char *newpath)
+{
+    (void)oldpath;
+    (void)newpath;
+    rt_errno = -RT_ENOSYS;
+    return -1;
+}
+
+int feof(FILE *f)
+{
+    return f ? f->eof : 1;
+}
+
+int ferror(FILE *f)
+{
+    return f ? f->err : 1;
+}
+
+void clearerr(FILE *f)
+{
+    if (f) {
+        f->eof = 0;
+        f->err = 0;
+    }
+}
+
+int setvbuf(FILE *f, char *buf, int mode, size_t size)
+{
+    (void)f;
+    (void)buf;
+    (void)mode;
+    (void)size;
+    return 0;
+}
+
+int fseek(FILE *f, long offset, int whence)
+{
+    size_t base;
+    size_t pos;
+
+    if (!f || f->fd != RT_FILE_MEM) {
+        rt_errno = -RT_EBADF;
+        return -1;
+    }
+    if (whence == SEEK_SET)
+        base = 0;
+    else if (whence == SEEK_CUR)
+        base = f->pos;
+    else
+        base = f->len;
+    if (offset < 0 && (size_t)(-offset) > base) {
+        rt_errno = -RT_EINVAL;
+        return -1;
+    }
+    pos = offset < 0 ? base - (size_t)(-offset) : base + (size_t)offset;
+    if (pos > f->len)
+        pos = f->len;
+    f->pos = pos;
+    f->eof = 0;
+    return 0;
+}
+
+long ftell(FILE *f)
+{
+    if (!f || f->fd != RT_FILE_MEM) {
+        rt_errno = -RT_EBADF;
+        return -1;
+    }
+    return (long)f->pos;
+}
+
+int vfprintf(FILE *f, const char *fmt, va_list ap)
+{
+    char buf[4096];
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    size_t len;
+
+    if (n < 0)
+        return n;
+    len = (size_t)n;
+    if (len >= sizeof(buf))
+        len = sizeof(buf) - 1;
+    if (fwrite(buf, 1, len, f) != len)
+        return EOF;
+    return n;
+}
+
+int fprintf(FILE *f, const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+
+    va_start(ap, fmt);
+    r = vfprintf(f, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+int fscanf(FILE *f, const char *fmt, ...)
+{
+    char buf[128];
+    va_list ap;
+    int r;
+
+    if (!fgets(buf, sizeof(buf), f))
+        return EOF;
+    va_start(ap, fmt);
+    r = vsscanf(buf, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+int vsnprintf(char *dst, size_t n, const char *fmt, va_list ap)
+{
+    struct RtFmtOut out;
+    size_t term;
+
+    out.mode = RT_FMT_TO_BUFFER;
+    out.buf = dst;
+    out.cap = n;
+    out.len = 0;
+    out.error = 0;
+    rt_vformat(&out, fmt, ap);
+    if (n != 0) {
+        term = out.len;
+        if (term >= n)
+            term = n - 1u;
+        dst[term] = 0;
+    }
+    return out.error ? -1 : (int)out.len;
+}
+
+int snprintf(char *dst, size_t n, const char *fmt, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, fmt);
+    ret = vsnprintf(dst, n, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int vsprintf(char *dst, const char *fmt, va_list ap)
+{
+    struct RtFmtOut out;
+    out.mode = RT_FMT_TO_BUFFER;
+    out.buf = dst;
+    out.cap = RT_NULL;
+    out.len = 0;
+    out.error = 0;
+    rt_vformat(&out, fmt, ap);
+    dst[out.len] = 0;
+    return out.error ? -1 : (int)out.len;
+}
+
+int sprintf(char *dst, const char *fmt, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, fmt);
+    ret = vsprintf(dst, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int vprintf(const char *fmt, va_list ap)
+{
+    struct RtFmtOut out;
+    out.mode = RT_FMT_TO_STDOUT;
+    out.buf = 0;
+    out.cap = 0;
+    out.len = 0;
+    out.error = 0;
+    return rt_vformat(&out, fmt, ap);
+}
+
+int printf(const char *fmt, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, fmt);
+    ret = vprintf(fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int vsscanf(const char *src, const char *fmt, va_list ap)
+{
+    struct RtScanIn in;
+
+    if (!src || !fmt)
+        return RT_EINVAL;
+    in.buf = src;
+    in.pos = 0;
+    in.start = 0;
+    in.len = 0;
+    in.bounded = 0;
+    return rt_vscan(&in, fmt, ap);
+}
+
+int sscanf(const char *src, const char *fmt, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, fmt);
+    ret = vsscanf(src, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int vscanf(const char *fmt, va_list ap)
+{
+    struct RtScanIn in;
+    int ret;
+
+    if (!rt_stdio_ready())
+        return RT_EINVAL;
+    if (!fmt)
+        return RT_EINVAL;
+    in.buf = (const char *)rt_stdin_buf;
+    in.pos = rt_stdin_pos;
+    in.start = rt_stdin_pos;
+    in.len = rt_stdin_len;
+    in.bounded = 1;
+    ret = rt_vscan(&in, fmt, ap);
+    rt_stdin_pos = in.pos;
+    return ret;
+}
+
+int scanf(const char *fmt, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, fmt);
+    ret = vscanf(fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int abs(int value)
+{
+    return value < 0 ? -value : value;
+}
+
+long labs(long value)
+{
+    return value < 0 ? -value : value;
+}
+
+unsigned long strtoul(const char *s, char **endptr, int base)
+{
+    unsigned long value = 0;
+    int digit;
+    int any = 0;
+
+    while (isspace((unsigned char)*s))
+        ++s;
+    if (*s == '+')
+        ++s;
+    if ((base == 0 || base == 16) && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        base = 16;
+        s += 2;
+    } else if (base == 0 && *s == '0') {
+        base = 8;
+    } else if (base == 0) {
+        base = 10;
+    }
+    while ((digit = rt_digit_value((unsigned char)*s)) >= 0 && digit < base) {
+        value = value * (unsigned)base + (unsigned)digit;
+        ++s;
+        any = 1;
+    }
+    if (endptr)
+        *endptr = (char *)(any ? s : s);
+    return value;
+}
+
+long strtol(const char *s, char **endptr, int base)
+{
+    int neg = 0;
+    unsigned long value;
+
+    while (isspace((unsigned char)*s))
+        ++s;
+    if (*s == '-' || *s == '+') {
+        neg = *s == '-';
+        ++s;
+    }
+    value = strtoul(s, endptr, base);
+    return neg ? -(long)value : (long)value;
+}
+
+int atoi(const char *s)
+{
+    return (int)strtol(s, 0, 10);
+}
+
+int strtod(const char *s, char **endptr)
+{
+    return (int)strtol(s, endptr, 10);
+}
+
+char *getenv(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+int system(const char *command)
+{
+    (void)command;
+    rt_errno = -RT_ENOSYS;
+    return -1;
+}
+
+int rand(void)
+{
+    rt_rand_state = rt_rand_state * 1103515245u + 12345u;
+    return (int)((rt_rand_state >> 1) & RAND_MAX);
+}
+
+void srand(unsigned seed)
+{
+    rt_rand_state = seed ? seed : 1;
+}
+
+void abort(void)
+{
+    rt_host_exit(134);
+    for (;;)
+        ;
+}
+
+void exit(int code)
+{
+    rt_host_exit(code);
+    for (;;)
+        ;
+}
+
+typedef int time_t;
+typedef int clock_t;
+
+struct tm {
+    int tm_sec;
+    int tm_min;
+    int tm_hour;
+    int tm_mday;
+    int tm_mon;
+    int tm_year;
+    int tm_wday;
+    int tm_yday;
+    int tm_isdst;
+};
+
+clock_t clock(void)
+{
+    return 0;
+}
+
+time_t time(time_t *t)
+{
+    time_t now = 0;
+    if (t)
+        *t = now;
+    return now;
+}
+
+int difftime(time_t end, time_t beginning)
+{
+    return end - beginning;
+}
+
+time_t mktime(struct tm *tm)
+{
+    (void)tm;
+    return 0;
+}
+
+static struct tm rt_tm;
+
+struct tm *localtime(const time_t *t)
+{
+    (void)t;
+    memset(&rt_tm, 0, sizeof(rt_tm));
+    rt_tm.tm_mday = 1;
+    rt_tm.tm_year = 70;
+    return &rt_tm;
+}
+
+struct tm *gmtime(const time_t *t)
+{
+    return localtime(t);
+}
+
+size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm)
+{
+    (void)tm;
+    if (!s || max == 0)
+        return 0;
+    if (!fmt)
+        fmt = "";
+    strncpy(s, fmt, max - 1);
+    s[max - 1] = 0;
+    return strlen(s);
+}
+
+struct lconv {
+    char *decimal_point;
+};
+
+static struct lconv rt_lconv = { "." };
+
+struct lconv *localeconv(void)
+{
+    return &rt_lconv;
+}
+
+char *setlocale(int category, const char *locale)
+{
+    (void)category;
+    (void)locale;
+    return "C";
+}
+
+typedef void (*sighandler_t)(int);
+
+sighandler_t signal(int sig, sighandler_t handler)
+{
+    (void)sig;
+    return handler;
+}
+
+int setjmp(int *env)
+{
+    (void)env;
+    return 0;
+}
+
+void longjmp(int *env, int val)
+{
+    (void)env;
+    (void)val;
+    abort();
+}
+
+int rt_isatty(int fd)
+{
+    if (rt_stdio_hosted)
+        return rt_host_isatty(fd);
+    return fd == RT_STDIN;
 }

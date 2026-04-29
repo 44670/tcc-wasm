@@ -5336,6 +5336,7 @@ static void gfunc_param_typed(Sym *func, Sym *arg)
     func_type = func->f.func_type;
     if (func_type == FUNC_OLD ||
         (func_type == FUNC_ELLIPSIS && arg == NULL)) {
+        convert_parameter_type(&vtop->type);
         /* default casting : only need to convert float to double */
         if ((vtop->type.t & VT_BTYPE) == VT_FLOAT) {
             gen_cast_s(VT_DOUBLE);
@@ -5887,7 +5888,7 @@ ST_FUNC void unary(void)
             }
         }
         break;
-#ifdef TCC_TARGET_RISCV64
+#if defined(TCC_TARGET_RISCV64) || defined(TCC_TARGET_WASM32)
     case TOK_builtin_va_start:
         parse_builtin_params(0, "ee");
         r = vtop->r & VT_VALMASK;

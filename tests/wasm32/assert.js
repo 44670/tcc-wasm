@@ -65,6 +65,15 @@ function assertWatShape() {
              !add.includes('(local $r0'));
   assertTrue('answer should not use dispatcher', !answer.includes('$dispatch'));
   assertTrue('Duff fallback should still use dispatcher', duff.includes('$dispatch'));
+
+  const varargsWat = read('varargs', 'wat').toString();
+  const sumInts = funcBody(varargsWat, 'sum_ints');
+  assertTrue('variadic function should have hidden va_area param',
+             sumInts.includes('(param $p1 i32)'));
+  assertTrue('va_start should use hidden va_area param',
+             sumInts.includes('(local.get $p1)'));
+  assertTrue('variadic calls should reserve a stack vararg area',
+             varargsWat.includes('global.set $__stack_pointer (i32.sub'));
 }
 
 async function assertRuntime() {
@@ -142,6 +151,13 @@ async function assertRuntime() {
   e.duff_copy(dst, src, 13);
   for (let i = 0; i < 13; ++i)
     assertEq(`duff.${i}`, dm[dst + i], 97 + i);
+
+  e = await load('varargs');
+  assertEq('varargs.no_extra_args', e.no_extra_args(), 0);
+  assertEq('varargs.sum_five', e.sum_five(), 15);
+  assertEq('varargs.pointer_second', e.pointer_second(), 29);
+  assertEq('varargs.nested_varargs', e.nested_varargs(), 12);
+  assertEq('varargs.indirect_varargs', e.indirect_varargs(), 24);
 }
 
 (async () => {

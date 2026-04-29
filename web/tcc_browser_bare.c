@@ -60,6 +60,7 @@ static void bare_reset_wasm32(void)
         for (j = 0; j < fn->nb_ops; ++j) {
             tcc_free(fn->ops[j].cond);
             tcc_free(fn->ops[j].text);
+            tcc_free(fn->ops[j].env);
         }
         tcc_free(fn->ops);
         tcc_free(fn);
@@ -70,14 +71,16 @@ static void bare_reset_wasm32(void)
 
     wasm32_forget_all_reg_exprs();
     dynarray_reset(&wasm32_types, &nb_wasm32_types);
+    wasm32_free_imports();
     wasm32_memory_end = 0;
     wasm32_stack_top = 0;
     wasm32_cur_func = NULL;
+    wasm32_needs_sjlj = 0;
 #endif
 }
 
 __attribute__((used))
-int tcc_bare_compile(const char *source)
+int tcc_bare_compile_with_options(const char *source, const char *options)
 {
     TCCState *s;
     FILE *out;
@@ -94,7 +97,7 @@ int tcc_bare_compile(const char *source)
         return -1;
     }
     tcc_set_error_func(s, NULL, bare_error_func);
-    tcc_set_options(s, "-nostdinc -nostdlib");
+    tcc_set_options(s, options && *options ? options : "-nostdinc -nostdlib");
     if (tcc_set_output_type(s, TCC_OUTPUT_EXE) < 0)
         goto done;
     if (tcc_compile_string_file(s, source, "input.c") < 0)
@@ -121,6 +124,19 @@ done:
     tcc_delete(s);
     bare_reset_wasm32();
     return ret;
+}
+
+__attribute__((used))
+int tcc_bare_compile(const char *source)
+{
+    return tcc_bare_compile_with_options(source, "-nostdinc -nostdlib");
+}
+
+__attribute__((used))
+int tcc_bare_compile_app(const char *source)
+{
+    return tcc_bare_compile_with_options(source,
+        "-nostdinc -nostdlib -Wl,--wasm-app");
 }
 
 __attribute__((used))

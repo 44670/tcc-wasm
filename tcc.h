@@ -812,6 +812,10 @@ struct TCCState {
     unsigned char has_text_addr;
     addr_t text_addr; /* address of text section */
     unsigned section_align; /* section alignment */
+#ifdef TCC_TARGET_WASM32
+    unsigned char wasm_link_mode;
+    addr_t wasm_heap_end;
+#endif
 #ifdef TCC_TARGET_I386
     int seg_size; /* 32. Can be 16 with i386 assembler (.code16) */
 #endif
@@ -1734,6 +1738,7 @@ ST_FUNC void gen_increment_tcov (SValue *sv);
 #ifdef TCC_TARGET_WASM32
 ST_FUNC int wasm32_output_module(FILE *f);
 ST_FUNC void wasm32_mark_return_jump(void);
+ST_FUNC void gen_va_start(void);
 #endif
 
 /* ------------ c67-gen.c ------------ */

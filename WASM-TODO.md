@@ -5,6 +5,9 @@ backend. It is not a one-off punch list. Each item should either preserve a
 clear backend invariant, move the backend toward a complete C ABI, or add a
 test that prevents regression.
 
+The shared runtime ABI and memory map are specified in `WASM_DESIGN.md`; this
+file also tracks the remaining implementation tasks for that ABI.
+
 ## Current Position
 
 The backend emits standalone WebAssembly text format (`.wat`) from TinyCC's
@@ -25,17 +28,42 @@ Currently working:
 - `make wasm-bare-test`, which instantiates the bare hosted compiler wasm
   directly in Node and compiles fib, Duff's device, and a negative diagnostic
   case through the exported C ABI
+- `make wasm-ide`, which prepares `web/ide-shell.html` plus sibling
+  `web/tcc.wasm` and `web/libc.wasm` artifacts for the browser IDE. The page
+  emits WAT/app wasm, accepts stdin, runs the app, and shows libc-captured
+  stdout
 - `make wasm-libc`, which builds `libc.wasm` from `lib/wasm32-libc.c` using
   `wasm32-tcc` and `wasm-as`
 - `make wasm-libc-test`, which instantiates `libc.wasm` directly in Node and
-  tests allocation plus 1MB buffered stdin/stdout/stderr hooks
+  tests the libc import/export contract, heap setup, allocator edge cases,
+  memory/string primitives, 1MB buffered stdin/stdout/stderr hooks, and direct
+  printf/scanf-family calls
+- `make wasm-runtime-test`, which instantiates `libc.wasm` and a TCC-generated
+  app wasm with one host-owned memory, initializes libc from app heap bounds,
+  feeds stdin, calls app `main`, and checks libc-captured stdout
+- `make wasm-algorithm-test`, which compiles program/stdin/stdout fixtures,
+  runs them in Node, and checks captured stdout
+- `make wasm-printf-test`, which compiles and runs printf-family fixtures
+  against `libc.wasm`
+- `make wasm-lua-test`, which builds upstream Lua 5.1.5 sources through the
+  wasm32 backend, runs the Lua REPL in Node through the shared runtime, and runs
+  Lua's shipped `test/*.lua` sample corpus
 - i32 integer scalars, pointers, char/short loads and stores
 - direct calls and i32 scalar function returns
 - function pointers through a wasm table and `call_indirect`
+- initial 32-bit integer/pointer varargs ABI using caller-packed stack slots
+- `libc.wasm` printf family for integer, pointer, char, string, width,
+  precision, and common integer flags
+- `libc.wasm` scanf family for integer, pointer, char, string, width,
+  assignment suppression, `%n`, and small integer stores
+- minimal in-memory file support in `libc.wasm`, including host-seeded files
+  and basic `fopen`/`fread`/`fwrite`/`fseek`/`ftell`/`fclose`
 - global data, string literals, simple pointer relocations, BSS/common symbols
 - local stack frames in linear memory using `__stack_pointer`
 - local arrays, structs, field access, `&local`, scalar spills
 - `memset`, `memmove`, and `memcpy` fallbacks for compiler-emitted aggregate operations
+- wasm-native `setjmp`/`longjmp` for protected-call style control flow, using
+  Wasm exception handling tags when assembling linked runtime modules
 - structured WAT emission for straight-line functions and simple reducible
   `if`/`else` diamonds with a shared return
 - simple structured result paths use wasm stack results where possible, for
@@ -46,11 +74,13 @@ Currently working:
 Known unsupported areas are intentionally explicit in `wasm32-gen.c`:
 
 - floating point
-- varargs
 - VLA
 - computed goto
 - full aggregate ABI
-- unresolved imports and real linking
+- 64-bit and floating-point varargs
+- general wasm object files/linking beyond direct app imports from `libc.wasm`
+- full Lua number semantics; the current Lua harness maps `lua_Number`/`double`
+  to `int` until wasm32 float/double lowering exists
 
 ## Design Principles
 
@@ -224,7 +254,8 @@ Tasks:
   - struct returns using hidden sret pointer where needed
   - packed/small aggregate policy
 - Expand indirect-call signatures to exact wasm types.
-- Support imported external functions with explicit `(import ...)` declarations.
+- Broaden imported external functions beyond the current linked-runtime libc
+  namespace.
 - Decide how libc/runtime symbols are resolved:
   - standalone built-ins for tiny smoke tests
   - imports for host-provided functions
@@ -310,8 +341,9 @@ Legacy single-file host:
 Bare wasm host:
 
 - `web/tcc_browser_bare.c` embeds TCC through `tcc.c`, but exports a direct C
-  ABI: `tcc_bare_compile`, `tcc_bare_output`, `tcc_bare_output_len`,
-  `tcc_bare_error`, and `tcc_bare_error_len`.
+  ABI: `tcc_bare_compile`, `tcc_bare_compile_app`,
+  `tcc_bare_compile_with_options`, `tcc_bare_output`,
+  `tcc_bare_output_len`, `tcc_bare_error`, and `tcc_bare_error_len`.
 - `web/tcc-wasm-bare-shell.html` is the editable source. `make
   wasm-bare-demo` compiles `web/tcc-browser-bare.wasm` and embeds it as base64
   into the generated single-file `web/tcc-wasm-bare.html`.
@@ -329,6 +361,19 @@ Bare wasm host:
 - Output uses `open_memstream` plus `tcc_output_wast_file`, so no MEMFS output
   file is needed.
 
+IDE host:
+
+- `web/ide-shell.html` is the editable source. `make wasm-ide` prepares
+  sibling `web/tcc.wasm` and `web/libc.wasm` artifacts; the IDE loads those and
+  `web/runtime.js` directly instead of embedding wasm into generated HTML.
+- The IDE compiles with `tcc_bare_compile_app`, displays WAT, assembles it to
+  app wasm in the browser, then runs app wasm with one host-owned fixed memory
+  shared with `libc.wasm`.
+- Program input flows through `libc.rt_stdin_set`; output is read from
+  `rt_stdout_ptr`/`rt_stdout_len` and `rt_stderr_ptr`/`rt_stderr_len`.
+- The current WAT assembler is WABT loaded from a CDN. Offline single-file use
+  needs an embedded assembler payload or a future binary wasm writer.
+
 Tasks:
 
 - Keep `web/tcc-wasm-shell.html` as the editable source for the UI and
@@ -336,8 +381,12 @@ Tasks:
 - Keep `web/tcc-wasm-bare-shell.html` as the editable source and
   `web/tcc-wasm-bare.html` plus `web/tcc-browser-bare.wasm` as generated
   output.
-- Add a small smoke test that opens the generated HTML in headless Chromium and
-  checks that the default fib example reaches `statusText == "Compiled"`.
+- Keep `web/ide-shell.html` as the editable source, with `web/tcc.wasm`,
+  `web/libc.wasm`, and `web/runtime.js` as sibling runtime assets.
+- Decide whether WAT-to-wasm assembly stays on CDN WABT for now or becomes a
+  local `web/wabt.wasm`/JS dependency.
+- Add a small smoke test that opens `web/ide-shell.html` in headless Chromium
+  and checks that the default fib example reaches `statusText == "Compiled"`.
 - Add a second browser smoke test for Duff's device to catch repeated-compile
   state leaks.
 - Make the page surface backend diagnostics without losing the previous
@@ -352,46 +401,75 @@ Tasks:
 Runtime-hosting design for larger C programs:
 
 - Use one fixed memory: 4096 pages (256MB), minimum equals maximum.
-- Put TCC-emitted program data/stack in a low-memory region and enforce a hard
-  ceiling below the Emscripten runtime provider's `GLOBAL_BASE`.
-- Build the provider runtime with an explicit high `GLOBAL_BASE`, for example
-  64MB, and make the TCC backend reject any layout whose `__heap_base` would
-  reach that address.
-- Import runtime services through stable wrappers such as `rt_malloc`,
-  `rt_free`, `rt_puts`, and typed printf helpers; do not import raw C varargs
-  until the wasm32 varargs ABI is implemented.
-- Start with imported memory mode:
-  `(import "env" "memory" (memory 4096 4096))`, then add exports/imports only
-  through documented symbols.
+- The host owns the `WebAssembly.Memory` object. Both `libc.wasm` and app wasm
+  import it as `(import "env" "memory" (memory 4096 4096))`.
+- `libc.wasm` keeps its static data below the first 1MB. User modules place
+  static data at or above `0x00100000`, then export layout globals such as
+  `__data_end`, `__heap_base`, and `__heap_end`.
+- The host startup sequence should instantiate `libc.wasm`, instantiate the app
+  with `libc` imports, call `rt_init_heap(app.__heap_base, app.__heap_end)`,
+  then call the app entry point. This makes the app provide the dynamic heap
+  range instead of baking one into `libc.wasm`.
+- `rt_init_heap(start, end)` must align bounds, reject too-small or overlapping
+  ranges, and leave `malloc` returning null until initialization succeeds.
+- `rt_init_heap` should allocate libc-owned runtime state from that heap,
+  including the 1MB stdin, stdout, and stderr buffers. Stdio pointers remain
+  stable until a later `rt_shutdown`/reinitialization API exists.
+- The backend should enforce a hard app ceiling so app static data/stack/heap
+  cannot overlap libc fixed state or future reserved regions.
+- Import runtime services through stable wrappers such as `malloc`, `free`,
+  `read`, `write`, `putchar`, `puts`, and `printf`. Raw C varargs are now
+  valid only for the initial 32-bit slot ABI; 64-bit and floating-point varargs
+  remain unsupported.
+- Add exports/imports only through documented symbols.
 
 Standalone runtime provider:
 
 - `lib/wasm32-libc.c` is compiled by this backend, not Emscripten. It is the
   bootstrap provider for `libc.wasm`.
 - The first provider exports `malloc`, `free`, `realloc`, `calloc`, `memset`,
-  `memcpy`, `memmove`, `memcmp`, string basics, and simple stdio entry points.
-- `stdin`, `stdout`, and `stderr` are internal fixed buffers with a 1MB capacity
-  each. Host code can seed stdin through `rt_stdin_set`/`rt_stdin_append`, read
-  captured output through `rt_stdout_ptr` plus `rt_stdout_len`, and reset state
-  through `rt_stdio_reset`.
+  `memcpy`, `memmove`, `memcmp`, string basics, simple stdio entry points, and
+  initial integer/string `printf` and `scanf` families.
+- `stdin`, `stdout`, and `stderr` use buffers with a 1MB capacity each,
+  allocated from the app-provided `rt_init_heap` range. Host code can seed stdin
+  through `rt_stdin_set`/`rt_stdin_append`, read captured output through
+  `rt_stdout_ptr` plus `rt_stdout_len`, and reset state through
+  `rt_stdio_reset`.
 - `read`, `write`, `getchar`, `putchar`, and `puts` are non-vararg wrappers over
-  those buffers. Full `printf` should wait for the typed value layer and varargs
-  ABI instead of inventing a separate calling convention.
-- The current provider owns its own memory. The next step is a linked-provider
-  mode where user modules import `env.memory` and import runtime functions from
-  this provider, with a hard layout ceiling that keeps user data below the
-  runtime/global-base region.
+  those buffers. The wasm32 backend now has an initial 32-bit slot varargs ABI,
+  so integer/string `printf` work can use the real C calling convention instead
+  of inventing a separate one.
+- The current provider imports host-owned memory and rejects allocation until
+  `rt_init_heap(start, end)` succeeds.
+
+Runtime/libc tasks:
+
+- Add 64-bit integer formatting once 64-bit vararg slots are defined.
+- Add floating-point formatting after wasm32 float lowering exists.
+- Add scansets (`%[...]`) and stricter overflow/error behavior for scanf.
+- Replace the small libc declarations in tests/demos with usable headers.
+- Keep the in-memory file layer intentionally small unless a real POSIX-like
+  filesystem contract is designed.
 
 ### 8. Varargs and VLA
 
-These need a stable stack and ABI design first.
+The initial varargs ABI uses caller-packed 4-byte stack slots and a hidden
+`i32 __va_area` parameter after the named arguments. `va_list` is a `char *`
+pointing at the first variadic slot; no hidden count is part of the public ABI.
 
 Varargs tasks:
 
-- Define wasm32 `va_list` layout.
-- Spill incoming arguments to an addressable argument area when necessary.
-- Implement `gen_va_start`.
-- Add `va_arg` tests for int, pointer, double, and mixed arguments.
+- [x] Define wasm32 `va_list` layout for 32-bit integer/pointer slots.
+- [x] Pack the caller's variadic tail into an addressable stack array.
+- [x] Add the hidden wasm parameter to direct, imported, and indirect variadic
+  calls.
+- [x] Implement `gen_va_start`.
+- [x] Add `va_arg` runtime and WAT-shape tests for int, pointer, nested calls,
+  zero extra args, and indirect variadic calls.
+- [ ] Decide whether a debug-only count/header before `__va_area` is useful for
+  host diagnostics; keep `va_list` itself as a pointer to the first argument.
+- [ ] Add 64-bit integer vararg slots.
+- [ ] Add double and mixed vararg tests after floating point is implemented.
 
 VLA tasks:
 
@@ -432,6 +510,12 @@ The backend has a repeatable test command:
 - assertions: `tests/wasm32/assert.js`
 - bare browser host smoke: `make wasm-bare-test`
 - runtime provider smoke: `make wasm-libc-test`
+- shared runtime smoke: `make wasm-runtime-test`
+- algorithm fixture smoke: `make wasm-algorithm-test`
+- printf-family smoke: `make wasm-printf-test`
+- scanf-family smoke: `make wasm-scanf-test`
+- Lua 5.1.5 REPL and shipped sample tests: `make wasm-lua-test`
+- IDE pipeline smoke: `make wasm-ide-test`
 
 The harness currently:
 
@@ -456,19 +540,29 @@ Minimum always-on corpus:
 - `function_ptr.c`: direct and indirect calls, global function-pointer init
 - `longlong.c`: current two-word arithmetic coverage
 - `scalars.c`: char/short casts and bitfields
+- `varargs.c`: initial 32-bit integer/pointer varargs ABI
 
 Harness tasks:
 
 - Add optional `wasm-opt --validate` when Binaryen is available.
 - Add negative tests for unsupported features with exact diagnostics:
-  float, varargs, VLA, computed goto, unresolved imports.
+  float, 64-bit/floating varargs, VLA, computed goto, unsupported imports.
 - Add a mode that compares checked-in `tests/wasm32/*.wat` against freshly
   generated output, so WAT shape changes are intentional.
-- Add browser smoke tests for `web/tcc-wasm-demo.html`.
+- Add real browser smoke tests for `web/tcc-wasm-demo.html` and
+  `web/ide-shell.html`.
 - Extend `wasm-bare-test` to run in a real browser after the direct Node
   instantiation path is stable.
-- Add user-module import tests once the backend can emit imported memory and
-  unresolved function imports against `libc.wasm`.
+- Add broader user-module import tests now that the backend can emit imported
+  memory and unresolved function imports against `libc.wasm`.
+- Add more `rt_init_heap(start, end)` tests for invalid/unaligned bounds and
+  exhaustion.
+- Keep `wasm-algorithm-test` running through the shared `libc.wasm` host as the
+  linked-runtime ABI evolves.
+- Keep `make wasm-test`, `make wasm-libc-test`, `make wasm-runtime-test`,
+  `make wasm-printf-test`, `make wasm-scanf-test`, `make wasm-lua-test`,
+  `make wasm-ide-test`, and `make wasm-algorithm-test` passing after each ABI
+  step.
 
 ## Near-Term Priority Order
 
@@ -479,10 +573,11 @@ Harness tasks:
 5. Replace fragile string-peeling in structured returns with typed expression
    records in `WasmOp`.
 6. Broaden structured CFG lowering beyond straight-line and simple if/else.
-7. Add imports for unresolved functions and runtime services.
-8. Add browser smoke tests for `web/tcc-wasm-demo.html` and the generated
-   `web/tcc-wasm-bare.html`.
-9. Implement varargs.
+7. Add broader imports for runtime services and document the supported libc
+   surface.
+8. Add browser smoke tests for `web/tcc-wasm-demo.html`,
+   `web/tcc-wasm-bare.html`, and `web/ide-shell.html`.
+9. Extend varargs beyond 32-bit integer/pointer slots.
 10. Implement VLA.
 11. Implement computed goto.
 
