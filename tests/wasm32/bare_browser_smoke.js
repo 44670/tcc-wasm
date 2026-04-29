@@ -1,6 +1,6 @@
 const fs = require('fs');
 
-const wasmPath = process.argv[2] || 'web/tcc-browser-bare.wasm';
+const wasmPath = process.argv[2] || 'web/tcc.wasm';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -190,7 +190,7 @@ int answer(void) { return add(fib(6), 4); }
   assertTrue('bad source should fail', bad.rc !== 0);
   assertTrue('bad source should report diagnostics', bad.err.length > 0);
 
-  console.log('wasm bare browser smoke ok');
+  console.log('wasm compiler smoke ok');
 }
 
 main().catch(err => {

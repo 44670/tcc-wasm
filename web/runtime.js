@@ -159,6 +159,61 @@
     };
   }
 
+  function createAppLibcImports(memory, libcExports) {
+    const view = () => new DataView(memory.buffer);
+    const imports = Object.create(null);
+    Object.assign(imports, libcExports);
+
+    imports.fabs = Math.abs;
+    imports.sin = Math.sin;
+    imports.sinh = Math.sinh || (x => (Math.exp(x) - Math.exp(-x)) / 2);
+    imports.cos = Math.cos;
+    imports.cosh = Math.cosh || (x => (Math.exp(x) + Math.exp(-x)) / 2);
+    imports.tan = Math.tan;
+    imports.tanh = Math.tanh || (x => {
+      const e = Math.exp(2 * x);
+      return (e - 1) / (e + 1);
+    });
+    imports.asin = Math.asin;
+    imports.acos = Math.acos;
+    imports.atan = Math.atan;
+    imports.atan2 = Math.atan2;
+    imports.ceil = Math.ceil;
+    imports.floor = Math.floor;
+    imports.fmod = (x, y) => x % y;
+    imports.sqrt = Math.sqrt;
+    imports.pow = Math.pow;
+    imports.log = Math.log;
+    imports.log10 = Math.log10 || (x => Math.log(x) / Math.LN10);
+    imports.exp = Math.exp;
+    imports.ldexp = (x, exp) => x * Math.pow(2, exp);
+    imports.modf = (x, iptr) => {
+      const i = x < 0 ? Math.ceil(x) : Math.floor(x);
+      view().setFloat64(iptr, i, true);
+      return x - i;
+    };
+    imports.frexp = (x, expPtr) => {
+      if (x === 0 || !Number.isFinite(x)) {
+        view().setInt32(expPtr, 0, true);
+        return x;
+      }
+      const sign = x < 0 ? -1 : 1;
+      let y = Math.abs(x);
+      let exp = 0;
+      while (y < 0.5) {
+        y *= 2;
+        --exp;
+      }
+      while (y >= 1) {
+        y /= 2;
+        ++exp;
+      }
+      view().setInt32(expPtr, exp, true);
+      return sign * y;
+    };
+    return imports;
+  }
+
   function createLibcImports(memory, options = {}) {
     const useNodeStdio = options.stdio === "inherit" && isNode();
     const fs = useNodeStdio ? require("fs") : null;
@@ -328,14 +383,14 @@
       return new AppRuntime(await compileModule(libc), options);
     }
 
-    validateAppImports(appModule, libcExports) {
+    validateAppImports(appModule, libcImports) {
       const imports = WebAssembly.Module.imports(appModule);
       const hasSharedMemory = imports.some(imp =>
         imp.module === "env" && imp.name === "memory" && imp.kind === "memory");
       if (!hasSharedMemory)
         throw new Error("app module did not import shared memory");
       for (const imp of imports) {
-        if (imp.module === "libc" && !(imp.name in libcExports))
+        if (imp.module === "libc" && !(imp.name in libcImports))
           throw new Error(`app imports unavailable libc symbol: ${imp.name}`);
       }
     }
@@ -349,12 +404,13 @@
       const appModule = await compileModule(appSource);
       const libc = await WebAssembly.instantiate(this.libcModule,
         createLibcImports(memory, options));
+      const libcImports = createAppLibcImports(memory, libc.exports);
       if (options.stdio === "inherit" && libc.exports.rt_stdio_set_hosted)
         libc.exports.rt_stdio_set_hosted(1);
-      this.validateAppImports(appModule, libc.exports);
+      this.validateAppImports(appModule, libcImports);
       const app = await WebAssembly.instantiate(appModule, {
         env: { memory },
-        libc: libc.exports
+        libc: libcImports
       });
       const heapBase = valueOf(app.exports.__heap_base);
       const heapEnd = valueOf(app.exports.__heap_end);
@@ -467,6 +523,7 @@
     AppRuntime,
     compileModule,
     createLibcImports,
+    createAppLibcImports,
     readBytes,
     readString,
     runApp,

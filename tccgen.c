@@ -1034,6 +1034,9 @@ ST_FUNC void vset_VT_CMP(int op)
     vtop->cmp_op = op;
     vtop->jfalse = 0;
     vtop->jtrue = 0;
+#ifdef TCC_TARGET_WASM32
+    wasm32_reuse_last_cmp(vtop);
+#endif
 }
 
 /* called once before asking generators to load VT_CMP to a register */
@@ -3171,7 +3174,7 @@ op_err:
         gv(is_float(vtop->type.t & VT_BTYPE) ? RC_FLOAT : RC_INT);
 }
 
-#if defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64 || defined TCC_TARGET_ARM
+#if defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64 || defined TCC_TARGET_ARM || defined TCC_TARGET_WASM32
 #define gen_cvt_itof1 gen_cvt_itof
 #else
 /* generic itof for unsigned long long case */
@@ -3198,7 +3201,7 @@ static void gen_cvt_itof1(int t)
 }
 #endif
 
-#if defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64
+#if defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64 || defined TCC_TARGET_WASM32
 #define gen_cvt_ftoi1 gen_cvt_ftoi
 #else
 /* generic ftoi for unsigned long long case */

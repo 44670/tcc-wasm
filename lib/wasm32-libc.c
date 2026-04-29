@@ -95,6 +95,7 @@ int rt_host_isatty(int fd);
 void rt_host_exit(int code);
 int vsnprintf(char *dst, size_t n, const char *fmt, va_list ap);
 int vsscanf(const char *src, const char *fmt, va_list ap);
+double strtod(const char *s, char **endptr);
 
 int *__errno_location(void)
 {
@@ -1029,6 +1030,45 @@ static int rt_vscan(struct RtScanIn *in, const char *fmt, va_list ap)
             continue;
         }
 
+        if (spec == 'f' || spec == 'F' || spec == 'e' || spec == 'E'
+            || spec == 'g' || spec == 'G') {
+            char token[128];
+            char *end;
+            double value;
+            size_t token_start = in->pos;
+            int limit = width > 0 ? width : (int)sizeof(token) - 1;
+            int count = 0;
+            int c;
+
+            if (limit > (int)sizeof(token) - 1)
+                limit = (int)sizeof(token) - 1;
+            while (count < limit) {
+                c = rt_scan_peek_at(in, (size_t)count);
+                if (!(rt_is_digit(c) || c == '+' || c == '-'
+                      || c == '.' || c == 'e' || c == 'E'))
+                    break;
+                token[count++] = (char)c;
+            }
+            token[count] = 0;
+            value = strtod(token, &end);
+            if (end == token) {
+                in->pos = token_start;
+                return rt_scan_finish(in, assigned);
+            }
+            in->pos = token_start + (size_t)(end - token);
+            if (!suppress) {
+                if (length == RT_SCAN_LEN_L) {
+                    double *dst = va_arg(ap, double *);
+                    *dst = value;
+                } else {
+                    float *dst = va_arg(ap, float *);
+                    *dst = (float)value;
+                }
+                ++assigned;
+            }
+            continue;
+        }
+
         if (spec == 's') {
             char *dst = suppress ? 0 : va_arg(ap, char *);
             int count = 0;
@@ -1152,6 +1192,204 @@ static void rt_fmt_number(struct RtFmtOut *out, unsigned int value,
         rt_fmt_putc(out, digits[i]);
     if (left)
         rt_fmt_pad(out, ' ', width - total);
+}
+
+static int rt_append_char(char *buf, int pos, int cap, int ch)
+{
+    if (pos + 1 < cap)
+        buf[pos] = (char)ch;
+    return pos + 1;
+}
+
+static int rt_append_str(char *buf, int pos, int cap, const char *s)
+{
+    while (*s)
+        pos = rt_append_char(buf, pos, cap, *s++);
+    return pos;
+}
+
+static int rt_append_uint_dec(char *buf, int pos, int cap, unsigned int v)
+{
+    char tmp[16];
+    int n = 0;
+    int i;
+
+    do {
+        tmp[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (i = n - 1; i >= 0; --i)
+        pos = rt_append_char(buf, pos, cap, tmp[i]);
+    return pos;
+}
+
+static double rt_pow10_int(int n)
+{
+    double r = 1.0;
+    int i;
+
+    if (n >= 0) {
+        for (i = 0; i < n; ++i)
+            r *= 10.0;
+    } else {
+        for (i = 0; i < -n; ++i)
+            r /= 10.0;
+    }
+    return r;
+}
+
+static int rt_decimal_exp(double x)
+{
+    int e = 0;
+
+    if (x < 0)
+        x = -x;
+    if (x == 0.0)
+        return 0;
+    while (x >= 10.0) {
+        x /= 10.0;
+        ++e;
+    }
+    while (x < 1.0) {
+        x *= 10.0;
+        --e;
+    }
+    return e;
+}
+
+static int rt_append_fixed_abs(char *buf, int pos, int cap, double x,
+                               int precision, int trim)
+{
+    unsigned int whole;
+    double frac;
+    double round = 0.5;
+    int dot_pos;
+    int end_pos;
+    int i;
+
+    if (precision < 0)
+        precision = 6;
+    if (precision > 60)
+        precision = 60;
+    for (i = 0; i < precision; ++i)
+        round /= 10.0;
+    x += round;
+    whole = (unsigned int)x;
+    frac = x - (double)whole;
+    pos = rt_append_uint_dec(buf, pos, cap, whole);
+    dot_pos = pos;
+    if (precision > 0)
+        pos = rt_append_char(buf, pos, cap, '.');
+    for (i = 0; i < precision; ++i) {
+        int digit;
+        frac *= 10.0;
+        digit = (int)frac;
+        pos = rt_append_char(buf, pos, cap, '0' + digit);
+        frac -= (double)digit;
+    }
+    end_pos = pos;
+    if (trim) {
+        while (end_pos > dot_pos && buf[end_pos - 1] == '0')
+            --end_pos;
+        if (end_pos > dot_pos && buf[end_pos - 1] == '.')
+            --end_pos;
+        pos = end_pos;
+    }
+    return pos;
+}
+
+static int rt_append_exp_abs(char *buf, int pos, int cap, double x,
+                             int precision, int upper, int trim)
+{
+    int exp = rt_decimal_exp(x);
+    int i;
+
+    if (precision < 0)
+        precision = 6;
+    if (precision > 60)
+        precision = 60;
+    x /= rt_pow10_int(exp);
+    x += 0.5 * rt_pow10_int(-precision);
+    if (x >= 10.0) {
+        x /= 10.0;
+        ++exp;
+    }
+    pos = rt_append_fixed_abs(buf, pos, cap, x, precision, trim);
+    pos = rt_append_char(buf, pos, cap, upper ? 'E' : 'e');
+    pos = rt_append_char(buf, pos, cap, exp < 0 ? '-' : '+');
+    if (exp < 0)
+        exp = -exp;
+    if (exp < 10)
+        pos = rt_append_char(buf, pos, cap, '0');
+    if (exp < 100) {
+        pos = rt_append_uint_dec(buf, pos, cap, (unsigned int)exp);
+    } else {
+        for (i = 1000; i > 1 && exp < i; i /= 10)
+            ;
+        pos = rt_append_uint_dec(buf, pos, cap, (unsigned int)exp);
+    }
+    return pos;
+}
+
+static void rt_fmt_double(struct RtFmtOut *out, double value, int spec,
+                          int width, int precision, int left, int zero,
+                          int plus, int space, int alt)
+{
+    char buf[160];
+    int pos = 0;
+    int negative = value < 0.0;
+    int trim = !alt;
+    int upper = spec == 'E' || spec == 'G';
+    int i;
+
+    if (value != value) {
+        pos = rt_append_str(buf, pos, sizeof buf, upper ? "NAN" : "nan");
+    } else {
+        if (negative)
+            value = -value;
+        if (negative)
+            pos = rt_append_char(buf, pos, sizeof buf, '-');
+        else if (plus)
+            pos = rt_append_char(buf, pos, sizeof buf, '+');
+        else if (space)
+            pos = rt_append_char(buf, pos, sizeof buf, ' ');
+
+        if (value > 1.0e308) {
+            pos = rt_append_str(buf, pos, sizeof buf, upper ? "INF" : "inf");
+        } else if (spec == 'f' || spec == 'F') {
+            pos = rt_append_fixed_abs(buf, pos, sizeof buf, value,
+                                      precision < 0 ? 6 : precision, 0);
+        } else if (spec == 'e' || spec == 'E') {
+            pos = rt_append_exp_abs(buf, pos, sizeof buf, value,
+                                    precision < 0 ? 6 : precision, upper, 0);
+        } else {
+            int prec = precision < 0 ? 6 : precision;
+            int exp;
+            if (prec == 0)
+                prec = 1;
+            exp = rt_decimal_exp(value);
+            if (exp < -4 || exp >= prec) {
+                pos = rt_append_exp_abs(buf, pos, sizeof buf, value,
+                                        prec - 1, upper, trim);
+            } else {
+                int frac = prec - (exp + 1);
+                if (frac < 0)
+                    frac = 0;
+                pos = rt_append_fixed_abs(buf, pos, sizeof buf, value,
+                                          frac, trim);
+            }
+        }
+    }
+
+    if (pos >= (int)sizeof buf)
+        pos = (int)sizeof buf - 1;
+    buf[pos] = 0;
+    if (!left)
+        rt_fmt_pad(out, zero ? '0' : ' ', width - pos);
+    for (i = 0; i < pos; ++i)
+        rt_fmt_putc(out, buf[i]);
+    if (left)
+        rt_fmt_pad(out, ' ', width - pos);
 }
 
 static int rt_vformat(struct RtFmtOut *out, const char *fmt, va_list ap)
@@ -1294,25 +1532,18 @@ static int rt_vformat(struct RtFmtOut *out, const char *fmt, va_list ap)
         }
         case 'f':
         case 'F': {
-            int v = va_arg(ap, int);
-            int prec = precision < 0 ? 6 : precision;
-            unsigned int mag = v < 0 ? 0u - (unsigned int)v : (unsigned int)v;
-            rt_fmt_number(out, mag, 10, v < 0, 0, width, -1, left, zero,
-                          plus, space, 0, 0);
-            if (prec > 0) {
-                rt_fmt_putc(out, '.');
-                rt_fmt_pad(out, '0', prec);
-            }
+            double v = va_arg(ap, double);
+            rt_fmt_double(out, v, spec, width, precision, left, zero,
+                          plus, space, alt);
             break;
         }
         case 'e':
         case 'E':
         case 'g':
         case 'G': {
-            int v = va_arg(ap, int);
-            unsigned int mag = v < 0 ? 0u - (unsigned int)v : (unsigned int)v;
-            rt_fmt_number(out, mag, 10, v < 0, 0, width, -1, left, zero,
-                          plus, space, 0, 0);
+            double v = va_arg(ap, double);
+            rt_fmt_double(out, v, spec, width, precision, left, zero,
+                          plus, space, alt);
             break;
         }
         case 0:
@@ -1994,9 +2225,78 @@ int atoi(const char *s)
     return (int)strtol(s, 0, 10);
 }
 
-int strtod(const char *s, char **endptr)
+double strtod(const char *s, char **endptr)
 {
-    return (int)strtol(s, endptr, 10);
+    const char *p = s;
+    const char *digits_start;
+    int sign = 1;
+    double value = 0.0;
+    double scale = 1.0;
+    int saw_digit = 0;
+    int exp_sign = 1;
+    int exp_value = 0;
+    int i;
+
+    while (isspace((unsigned char)*p))
+        ++p;
+    if (*p == '-' || *p == '+') {
+        if (*p == '-')
+            sign = -1;
+        ++p;
+    }
+
+    digits_start = p;
+    while (*p >= '0' && *p <= '9') {
+        value = value * 10.0 + (double)(*p - '0');
+        ++p;
+        saw_digit = 1;
+    }
+    if (*p == '.') {
+        ++p;
+        while (*p >= '0' && *p <= '9') {
+            value = value * 10.0 + (double)(*p - '0');
+            scale *= 10.0;
+            ++p;
+            saw_digit = 1;
+        }
+    }
+
+    if (saw_digit && (*p == 'e' || *p == 'E')) {
+        const char *exp_start = p;
+        const char *q = p + 1;
+        int saw_exp = 0;
+        if (*q == '-' || *q == '+') {
+            if (*q == '-')
+                exp_sign = -1;
+            ++q;
+        }
+        while (*q >= '0' && *q <= '9') {
+            exp_value = exp_value * 10 + *q - '0';
+            ++q;
+            saw_exp = 1;
+        }
+        if (saw_exp)
+            p = q;
+        else
+            p = exp_start;
+    }
+
+    if (!saw_digit) {
+        if (endptr)
+            *endptr = (char *)s;
+        return 0.0;
+    }
+
+    value /= scale;
+    for (i = 0; i < exp_value; ++i) {
+        if (exp_sign > 0)
+            value *= 10.0;
+        else
+            value /= 10.0;
+    }
+    if (endptr)
+        *endptr = (char *)(saw_digit ? p : digits_start);
+    return sign < 0 ? -value : value;
 }
 
 char *getenv(const char *name)

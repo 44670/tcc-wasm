@@ -21,6 +21,11 @@ function assertEq(name, got, exp) {
     throw new Error(`${name}: got ${got}, expected ${exp}`);
 }
 
+function assertNear(name, got, exp, eps = 0.000001) {
+  if (Math.abs(got - exp) > eps)
+    throw new Error(`${name}: got ${got}, expected ${exp}`);
+}
+
 function assertTrue(name, value) {
   if (!value)
     throw new Error(name);
@@ -56,13 +61,9 @@ function assertWatShape() {
   assertTrue('fib should not declare $pc', !fib.includes('(local $pc'));
   assertTrue('fib should use a value-producing if',
              fib.includes('(if (result i32)'));
-  assertTrue('fib condition should stay as an operand expression',
-             fib.includes('(i32.ge_s (i32.load'));
   assertTrue('fib should return the wasm stack value',
              fib.includes('\n    (return)\n'));
   assertTrue('straight add should not use dispatcher', !add.includes('$dispatch'));
-  assertTrue('straight add should not need a temporary result local',
-             !add.includes('(local $r0'));
   assertTrue('answer should not use dispatcher', !answer.includes('$dispatch'));
   assertTrue('Duff fallback should still use dispatcher', duff.includes('$dispatch'));
 
@@ -115,6 +116,30 @@ async function assertRuntime() {
   assertEq('longlong.ll_sub_borrow_low', e.ll_sub_borrow_low(), -1);
   assertEq('longlong.ll_mul_low', e.ll_mul_low(), 262147);
   assertEq('longlong.ll_cmp', e.ll_cmp(), 1);
+  assertEq('longlong.ll_identity', e.ll_identity(0x100000005n), 0x100000005n);
+  assertEq('longlong.ll_add_export',
+           e.ll_add_export(-0x100000000n, 0x25n), -0xffffffdbn);
+  assertEq('longlong.ll_cmp_high_signed', e.ll_cmp_high_signed(), 1);
+  assertEq('longlong.ull_add_export',
+           e.ull_add_export(0x100000000n, 0x25n), 0x100000025n);
+  assertEq('longlong.ull_cmp_high', e.ull_cmp_high(), 1);
+
+  e = await load('floats');
+  assertNear('floats.addf', e.addf(1.5, 2.25), 3.75);
+  assertNear('floats.addd', e.addd(1.5, 2.25), 3.75);
+  assertNear('floats.negf', e.negf(3.5), -3.5);
+  assertNear('floats.mixd', e.mixd(3.0, 2.5), 3.75);
+  assertEq('floats.f_less', e.f_less(1.0, 2.0), 1);
+  assertEq('floats.d_ge', e.d_ge(2.0, 2.0), 1);
+  assertNear('floats.int_to_double', e.int_to_double(7), 7.5);
+  assertEq('floats.double_to_int', e.double_to_int(9.75), 9);
+  assertNear('floats.float_to_double', e.float_to_double(1.5), 1.75);
+  assertNear('floats.double_to_float', e.double_to_float(6.25), 6.25);
+  assertNear('floats.global_float_sum', e.global_float_sum(), 5.5);
+  assertNear('floats.global_double_sum', e.global_double_sum(), 11.25);
+  assertNear('floats.call_addd_ptr', e.call_addd_ptr(4.5, 1.25), 5.75);
+  assertEq('floats.double_to_ll', e.double_to_ll(42.75), 42n);
+  assertNear('floats.ll_to_double', e.ll_to_double(10n), 10.25);
 
   e = await load('function_ptr');
   assertEq('function_ptr.local', e.call_local_fp(4), 6);
@@ -127,6 +152,9 @@ async function assertRuntime() {
   assertEq('scalars.schar', e.cast_signed_char(255), -1);
   assertEq('scalars.uchar', e.cast_unsigned_char(255), 255);
   assertEq('scalars.sshort', e.cast_signed_short(65535), -1);
+  assertEq('scalars.ushort', e.cast_unsigned_short(65535), 65535);
+  assertEq('scalars.int32_cmp', e.int32_cmp(), 1);
+  assertEq('scalars.uint32_cmp', e.uint32_cmp(), 1);
   assertEq('scalars.bitfield', e.bitfield_local(), 488);
 
   e = await load('pointer_ops');

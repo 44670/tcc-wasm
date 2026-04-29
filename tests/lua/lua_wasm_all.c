@@ -1,9 +1,8 @@
 /*
  * Single-translation-unit Lua 5.1.5 wasm build harness.
  *
- * The upstream Lua sources are included unmodified. We exclude lmathlib.c
- * because this wasm32 backend does not lower double values yet, and provide a
- * small integer math library in lua_wasm_support.c.
+ * The upstream Lua sources are included unmodified as one translation unit so
+ * the wasm smoke tests do not need a separate archive/link step.
  */
 
 #define luaall_c
@@ -34,10 +33,10 @@
 #include "ldblib.c"
 #include "liolib.c"
 #include "loadlib.c"
+#include "lmathlib.c"
 #include "loslib.c"
 #include "lstrlib.c"
 #include "ltablib.c"
-#include "lua_wasm_support.c"
 #include "linit.c"
 
 #include "lua.c"

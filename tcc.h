@@ -1738,6 +1738,7 @@ ST_FUNC void gen_increment_tcov (SValue *sv);
 #ifdef TCC_TARGET_WASM32
 ST_FUNC int wasm32_output_module(FILE *f);
 ST_FUNC void wasm32_mark_return_jump(void);
+ST_FUNC void wasm32_reuse_last_cmp(SValue *sv);
 ST_FUNC void gen_va_start(void);
 #endif
 

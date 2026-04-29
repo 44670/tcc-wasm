@@ -25,3 +25,32 @@ int ll_cmp(void)
     long long b = 0x100000000LL;
     return a > b;
 }
+
+long long ll_identity(long long x)
+{
+    return x;
+}
+
+long long ll_add_export(long long a, long long b)
+{
+    return a + b;
+}
+
+int ll_cmp_high_signed(void)
+{
+    long long a = -0x100000000LL;
+    long long b = 0x7fffffffLL;
+    return a < b;
+}
+
+unsigned long long ull_add_export(unsigned long long a, unsigned long long b)
+{
+    return a + b;
+}
+
+int ull_cmp_high(void)
+{
+    unsigned long long a = 0x7000000000000001ULL;
+    unsigned long long b = 0x6000000000000001ULL;
+    return a > b;
+}
