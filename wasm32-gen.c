@@ -2449,6 +2449,7 @@ static void wasm32_emit_func(FILE *out, WasmFunc *fn)
         fprintf(out, "      )\n");
     }
     fprintf(out, "    )\n");
+    fprintf(out, "    (unreachable)\n");
     fprintf(out, "  )\n");
 
     wasm32_free_block_map(&map);
