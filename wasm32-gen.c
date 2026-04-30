@@ -807,14 +807,85 @@ static int wasm32_is_memory_builtin_name(const char *name)
         || !strcmp(name, "memcpy");
 }
 
+static int wasm32_is_old_style_func_type(CType *type)
+{
+    return (type->t & VT_BTYPE) == VT_FUNC
+        && type->ref->f.func_type == FUNC_OLD;
+}
+
+static int wasm32_app_implicit_variadic_named_args(const char *name)
+{
+    if (!strcmp(name, "printf") || !strcmp(name, "scanf"))
+        return 1;
+    if (!strcmp(name, "fprintf") || !strcmp(name, "fscanf")
+        || !strcmp(name, "sprintf") || !strcmp(name, "sscanf"))
+        return 2;
+    if (!strcmp(name, "snprintf"))
+        return 3;
+    return -1;
+}
+
+static WasmValType *wasm32_call_param_types(SValue *args, int nb_args,
+                                            int append_va_list,
+                                            int *nb_params)
+{
+    int i, n = 0;
+    WasmValType *types = NULL;
+
+    for (i = 0; i < nb_args; ++i)
+        if (!wasm32_append_abi_type(&args[i].type, &types, &n))
+            goto fail;
+    if (append_va_list) {
+        types = tcc_realloc(types, (n + 1) * sizeof types[0]);
+        types[n++] = WVT_I32;
+    }
+    *nb_params = n;
+    return types;
+fail:
+    tcc_free(types);
+    *nb_params = 0;
+    return NULL;
+}
+
+static void wasm32_note_direct_call_signature(const char *name, int nb_params,
+                                              int has_result,
+                                              WasmValType result_type,
+                                              int nb_results,
+                                              WasmValType result_types[2],
+                                              WasmValType *param_types)
+{
+    int i;
+    WasmImport *wi;
+
+    for (i = 0; i < nb_wasm32_imports; ++i) {
+        wi = wasm32_imports[i];
+        if (strcmp(wi->name, name))
+            continue;
+        if (wi->nb_params != nb_params || wi->has_result != has_result
+            || wi->result_type != result_type
+            || wi->nb_results != nb_results
+            || !wasm32_same_types(wi->result_types, result_types, nb_results)
+            || !wasm32_same_types(wi->param_types, param_types, nb_params))
+            tcc_error("wasm32: imported function '%s' used with incompatible type",
+                      name);
+        wasm32_free_types(param_types);
+        return;
+    }
+    wi = tcc_mallocz(sizeof *wi);
+    wi->name = tcc_strdup(name);
+    wi->has_result = has_result;
+    wasm32_import_set_types(wi, result_type, nb_results, result_types,
+                            param_types, nb_params);
+    dynarray_add(&wasm32_imports, &nb_wasm32_imports, wi);
+}
+
 static void wasm32_note_direct_call(const char *name, CType *type)
 {
-    int nb_params, has_result, i;
+    int nb_params, has_result;
     WasmValType result_type;
     int nb_results;
     WasmValType result_types[2];
     WasmValType *param_types;
-    WasmImport *wi;
 
     if (tcc_state->wasm_link_mode != WASM32_MODE_APP
         && wasm32_is_memory_builtin_name(name))
@@ -837,26 +908,30 @@ static void wasm32_note_direct_call(const char *name, CType *type)
                                         &param_types))
             tcc_error("wasm32: unsupported imported function pointer type");
     }
-    for (i = 0; i < nb_wasm32_imports; ++i) {
-        wi = wasm32_imports[i];
-        if (strcmp(wi->name, name))
-            continue;
-        if (wi->nb_params != nb_params || wi->has_result != has_result
-            || wi->result_type != result_type
-            || wi->nb_results != nb_results
-            || !wasm32_same_types(wi->result_types, result_types, nb_results)
-            || !wasm32_same_types(wi->param_types, param_types, nb_params))
-            tcc_error("wasm32: imported function '%s' used with incompatible type",
-                      name);
-        wasm32_free_types(param_types);
-        return;
-    }
-    wi = tcc_mallocz(sizeof *wi);
-    wi->name = tcc_strdup(name);
-    wi->has_result = has_result;
-    wasm32_import_set_types(wi, result_type, nb_results, result_types,
-                            param_types, nb_params);
-    dynarray_add(&wasm32_imports, &nb_wasm32_imports, wi);
+    wasm32_note_direct_call_signature(name, nb_params, has_result, result_type,
+                                      nb_results, result_types, param_types);
+}
+
+static void wasm32_note_direct_call_site(const char *name, CType *type,
+                                         SValue *args, int nb_args,
+                                         int append_va_list)
+{
+    int nb_params, has_result;
+    WasmValType result_type;
+    int nb_results;
+    WasmValType result_types[2];
+    WasmValType *param_types;
+
+    if (!wasm32_func_result_types(type, result_types, &nb_results))
+        tcc_error("wasm32: unsupported imported function result type");
+    has_result = nb_results != 0;
+    result_type = has_result ? result_types[0] : WVT_VOID;
+    param_types = wasm32_call_param_types(args, nb_args, append_va_list,
+                                          &nb_params);
+    if (nb_params && !param_types)
+        tcc_error("wasm32: unsupported imported function call argument type");
+    wasm32_note_direct_call_signature(name, nb_params, has_result, result_type,
+                                      nb_results, result_types, param_types);
 }
 
 static void wasm32_free_imports(void)
@@ -1271,6 +1346,7 @@ ST_FUNC void gfunc_call(int nb_args)
     int direct;
     int variadic;
     int named_args;
+    int implicit_variadic_named_args = -1;
     int call_args;
     unsigned long va_size = 0;
     int keep[NB_REGS];
@@ -1296,8 +1372,18 @@ ST_FUNC void gfunc_call(int nb_args)
             return;
         }
     }
-    variadic = wasm32_is_variadic_func_type(&func->type);
-    named_args = wasm32_named_param_count(&func->type);
+    if (direct && tcc_state->wasm_link_mode == WASM32_MODE_APP
+        && wasm32_is_old_style_func_type(&func->type))
+        implicit_variadic_named_args =
+            wasm32_app_implicit_variadic_named_args(name);
+    variadic = wasm32_is_variadic_func_type(&func->type)
+        || implicit_variadic_named_args >= 0;
+    named_args = implicit_variadic_named_args >= 0
+        ? implicit_variadic_named_args
+        : wasm32_named_param_count(&func->type);
+    if (variadic && nb_args < named_args)
+        tcc_error("wasm32: too few arguments to variadic function '%s'",
+                  direct ? name : "<indirect>");
     if (variadic) {
         unsigned long off = 0;
         for (i = named_args; i < nb_args; ++i) {
@@ -1352,7 +1438,11 @@ ST_FUNC void gfunc_call(int nb_args)
     result_type = wasm32_func_result_type(&func->type);
     cstr_new(&cs);
     if (direct) {
-        wasm32_note_direct_call(name, &func->type);
+        if (implicit_variadic_named_args >= 0)
+            wasm32_note_direct_call_site(name, &func->type, func + 1,
+                                         named_args, 1);
+        else
+            wasm32_note_direct_call(name, &func->type);
         cstr_printf(&cs, "(call $%s", name);
         for (i = 0; i < call_args; ++i) {
             CString arg;

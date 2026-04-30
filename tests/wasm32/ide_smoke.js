@@ -23,6 +23,18 @@ int main(void)
 }
 `;
 
+const IMPLICIT_STDIO_SOURCE = `
+int main(void)
+{
+    int a = 0;
+    int b = 0;
+    if (scanf("%d %d", &a, &b) != 2)
+        return 1;
+    printf("%d\\n", a + b);
+    return 0;
+}
+`;
+
 const MEM_SOURCE = `
 void *memset(void *dst, int c, unsigned int n);
 void *memcpy(void *dst, const void *src, unsigned int n);
@@ -115,6 +127,26 @@ function assertEq(name, got, expected) {
   assertEq('main return', result.rc, 0);
   assertEq('stdout', result.stdout, '42\n');
   assertEq('stderr', result.stderr, '');
+
+  const implicitStdioWat = compiler.compileApp(IMPLICIT_STDIO_SOURCE);
+  assertTrue('implicit scanf should use libc varargs ABI',
+             implicitStdioWat.includes(
+               '(import "libc" "scanf" (func $scanf (param i32) (param i32) (result i32))'));
+  assertTrue('implicit printf should use libc varargs ABI',
+             implicitStdioWat.includes(
+               '(import "libc" "printf" (func $printf (param i32) (param i32) (result i32))'));
+
+  const implicitStdioWatPath = path.join(tmpDir, 'implicit_stdio_app.wat');
+  const implicitStdioWasmPath = path.join(tmpDir, 'implicit_stdio_app.wasm');
+  fs.writeFileSync(implicitStdioWatPath, implicitStdioWat);
+  await assembleWat(implicitStdioWatPath, implicitStdioWasmPath);
+
+  const implicitStdioResult = await appRuntime.run(fs.readFileSync(implicitStdioWasmPath), {
+    stdin: '19 23\n'
+  });
+  assertEq('implicit stdio main return', implicitStdioResult.rc, 0);
+  assertEq('implicit stdio stdout', implicitStdioResult.stdout, '42\n');
+  assertEq('implicit stdio stderr', implicitStdioResult.stderr, '');
 
   const memWat = compiler.compileApp(MEM_SOURCE);
   assertTrue('app mode should import memset from libc',
