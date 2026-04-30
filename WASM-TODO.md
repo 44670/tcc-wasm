@@ -59,7 +59,9 @@ Currently working:
 - global data, string literals, simple pointer relocations, BSS/common symbols
 - local stack frames in linear memory using `__stack_pointer`
 - local arrays, structs, field access, `&local`, scalar spills
-- `memset`, `memmove`, and `memcpy` fallbacks for compiler-emitted aggregate operations
+- `memset`, `memmove`, and `memcpy` support for compiler-emitted aggregate
+  operations: standalone/libc builds keep local fallbacks, linked app builds
+  import the implementations from `libc.wasm`
 - wasm-native `setjmp`/`longjmp` for protected-call style control flow, using
   Wasm exception handling tags when assembling linked runtime modules
 - structured WAT emission for straight-line functions and simple reducible

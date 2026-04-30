@@ -238,35 +238,15 @@
 
   <script src="./runtime.js"></script>
   <script>
-    const defaultSource = `int getchar(void);
+    const defaultSource = `int scanf(const char *fmt, ...);
 int printf(const char *fmt, ...);
-
-int next_int(void)
-{
-    int c;
-    int sign = 1;
-    int value = 0;
-
-    do {
-        c = getchar();
-    } while (c == ' ' || c == '\\n' || c == '\\r' || c == '\\t');
-
-    if (c == '-') {
-        sign = -1;
-        c = getchar();
-    }
-
-    while (c >= '0' && c <= '9') {
-        value = value * 10 + c - '0';
-        c = getchar();
-    }
-    return value * sign;
-}
 
 int main(void)
 {
-    int a = next_int();
-    int b = next_int();
+    int a = 0;
+    int b = 0;
+    if (scanf("%d %d", &a, &b) != 2)
+        return 1;
     printf("%d\\n", a + b);
     return 0;
 }

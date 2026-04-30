@@ -801,6 +801,12 @@ static int wasm32_func_type_id(CType *type)
     return nb_wasm32_types - 1;
 }
 
+static int wasm32_is_memory_builtin_name(const char *name)
+{
+    return !strcmp(name, "memset") || !strcmp(name, "memmove")
+        || !strcmp(name, "memcpy");
+}
+
 static void wasm32_note_direct_call(const char *name, CType *type)
 {
     int nb_params, has_result, i;
@@ -810,13 +816,27 @@ static void wasm32_note_direct_call(const char *name, CType *type)
     WasmValType *param_types;
     WasmImport *wi;
 
-    if (!strcmp(name, "memset") || !strcmp(name, "memmove")
-        || !strcmp(name, "memcpy"))
+    if (tcc_state->wasm_link_mode != WASM32_MODE_APP
+        && wasm32_is_memory_builtin_name(name))
         return;
-    if (!wasm32_supported_func_type(type, &nb_params, &has_result,
-                                    &result_type, &nb_results, result_types,
-                                    &param_types))
-        tcc_error("wasm32: unsupported imported function pointer type");
+    if (tcc_state->wasm_link_mode == WASM32_MODE_APP
+        && wasm32_is_memory_builtin_name(name)) {
+        nb_params = 3;
+        has_result = 1;
+        result_type = WVT_I32;
+        nb_results = 1;
+        result_types[0] = WVT_I32;
+        result_types[1] = WVT_VOID;
+        param_types = tcc_malloc(3 * sizeof param_types[0]);
+        param_types[0] = WVT_I32;
+        param_types[1] = WVT_I32;
+        param_types[2] = WVT_I32;
+    } else {
+        if (!wasm32_supported_func_type(type, &nb_params, &has_result,
+                                        &result_type, &nb_results, result_types,
+                                        &param_types))
+            tcc_error("wasm32: unsupported imported function pointer type");
+    }
     for (i = 0; i < nb_wasm32_imports; ++i) {
         wi = wasm32_imports[i];
         if (strcmp(wi->name, name))
@@ -2871,7 +2891,8 @@ ST_FUNC int wasm32_output_module(FILE *f)
     wasm32_emit_func_index_globals(f);
     wasm32_emit_addr_globals(tcc_state, f);
     wasm32_emit_data_sections(tcc_state, f);
-    wasm32_emit_memory_builtins(f);
+    if (tcc_state->wasm_link_mode != WASM32_MODE_APP)
+        wasm32_emit_memory_builtins(f);
     for (i = 0; i < nb_wasm32_funcs; ++i)
         wasm32_emit_func(f, wasm32_funcs[i]);
     fprintf(f, ")\n");
