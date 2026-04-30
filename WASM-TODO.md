@@ -18,7 +18,7 @@ Currently working:
 
 - `wasm32-tcc -nostdlib -o out.wat file.c`
 - `make wasm-test`, which builds `wasm32-tcc`, compiles every wasm32 smoke
-  test to WAT, validates with `wasm-as`, runs Node runtime assertions, and
+  test to WAT, validates with WABT, runs Node runtime assertions, and
   checks important WAT shape properties
 - `make wasm-compiler`, which builds the hosted TCC wasm compiler used by the
   browser IDE without Emscripten's generated JS runtime, MEMFS, `Module`, or
@@ -31,7 +31,7 @@ Currently working:
   emits WAT/app wasm, accepts stdin, runs the app, and shows libc-captured
   stdout
 - `make wasm-libc`, which builds `libc.wasm` from `lib/wasm32-libc.c` using
-  `wasm32-tcc` and `wasm-as`
+  `wasm32-tcc` and WABT
 - `make wasm-libc-test`, which instantiates `libc.wasm` directly in Node and
   tests the libc import/export contract, heap setup, allocator edge cases,
   memory/string primitives, 1MB buffered stdin/stdout/stderr hooks, and direct
@@ -97,7 +97,7 @@ Known unsupported areas are intentionally explicit in `wasm32-gen.c`:
   documented import object; the generated Emscripten JS runtime is optional
   compatibility glue, not the compiler interface.
 - Add tests with every semantic expansion. A feature is not "supported" until a
-  `.c -> .wat -> wasm-as -> node` check exercises it.
+  `.c -> .wat -> WABT -> node` check exercises it.
 
 ## Core Architecture Target
 
@@ -339,15 +339,16 @@ IDE host:
   shared with `libc.wasm`.
 - Program input flows through `libc.rt_stdin_set`; output is read from
   `rt_stdout_ptr`/`rt_stdout_len` and `rt_stderr_ptr`/`rt_stderr_len`.
-- The current WAT assembler is WABT loaded from a CDN. Offline single-file use
-  needs an embedded assembler payload or a future binary wasm writer.
+- The browser WAT assembler is WABT loaded from a CDN. Node tests use the
+  pinned `wabt` npm package by default, with Binaryen `wasm-as` available as an
+  explicit fallback via `WASM_ASSEMBLER=binaryen`.
 
 Tasks:
 
 - Keep `web/ide-shell.html` as the editable source, with `web/tcc.wasm`,
   `web/libc.wasm`, and `web/runtime.js` as sibling runtime assets.
-- Decide whether WAT-to-wasm assembly stays on CDN WABT for now or becomes a
-  local `web/wabt.wasm`/JS dependency.
+- Decide whether browser WAT-to-wasm assembly stays on CDN WABT for now or
+  becomes a local `web/wabt.wasm`/JS dependency.
 - Add a small smoke test that opens `web/ide-shell.html` in headless Chromium
   and checks that the default fib example reaches `statusText == "Compiled"`.
 - Add a second browser smoke test for Duff's device to catch repeated-compile
@@ -486,7 +487,7 @@ The harness currently:
 
 1. Builds `wasm32-tcc`.
 2. Compiles every `tests/wasm32/*.c` to `.wat`.
-3. Assembles every `.wat` with Binaryen `wasm-as`.
+3. Assembles every `.wat` with WABT (`npm install` provides `wat2wasm`).
 4. Runs Node assertions for exported functions.
 5. Checks WAT shape for important codegen contracts:
    - fib uses structured WAT, not the dispatcher
@@ -549,7 +550,7 @@ Harness tasks:
 A feature is done only when:
 
 - unsupported code paths are removed or narrowed to a more precise error
-- generated WAT validates with `wasm-as`
+- generated WAT validates with WABT
 - a Node runtime test covers the behavior
 - `make wasm-test` passes, including WAT shape assertions when codegen shape is
   part of the feature

@@ -3,6 +3,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const Runtime = require('../../web/runtime.js');
+const { assembleWat } = require('./assemble_wat.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -91,22 +92,6 @@ const EXPECTED_STDOUT =
   'vsscanf:2:77:zz\n' +
   'scanf:3:17:48879:stdin-tail:18\n';
 
-function findWasmAs() {
-  const candidates = [];
-  if (process.env.WASM_AS)
-    candidates.push(process.env.WASM_AS);
-  candidates.push('wasm-as');
-  if (process.env.HOME)
-    candidates.push(path.join(process.env.HOME, 'emsdk/upstream/bin/wasm-as'));
-
-  for (const candidate of candidates) {
-    const result = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
-    if (!result.error && result.status === 0)
-      return candidate;
-  }
-  throw new Error('wasm-as not found; set WASM_AS=/path/to/wasm-as');
-}
-
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: ROOT,
@@ -135,7 +120,7 @@ function run(command, args, options = {}) {
     watPath,
     cPath
   ]);
-  run(findWasmAs(), [watPath, '-o', wasmPath], { cwd: tmpDir });
+  await assembleWat(watPath, wasmPath);
 
   const runtime = await Runtime.AppRuntime.create({
     libc: path.join(ROOT, 'libc.wasm')

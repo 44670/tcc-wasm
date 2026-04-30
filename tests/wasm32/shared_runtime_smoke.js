@@ -3,6 +3,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const Runtime = require('../../web/runtime.js');
+const { assembleWat } = require('./assemble_wat.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const encoder = new TextEncoder();
@@ -139,21 +140,6 @@ function valueOf(exported) {
     : exported;
 }
 
-function findWasmAs() {
-  const candidates = [];
-  if (process.env.WASM_AS)
-    candidates.push(process.env.WASM_AS);
-  candidates.push('wasm-as');
-  if (process.env.HOME)
-    candidates.push(path.join(process.env.HOME, 'emsdk/upstream/bin/wasm-as'));
-  for (const candidate of candidates) {
-    const result = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
-    if (!result.error && result.status === 0)
-      return candidate;
-  }
-  throw new Error('wasm-as not found; set WASM_AS=/path/to/wasm-as');
-}
-
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: ROOT,
@@ -194,7 +180,7 @@ function assertImportedVarargs(tmpDir) {
              text.includes('(call $imported_sum (i32.const 3) (global.get $__stack_pointer))'));
 }
 
-async function assertSetjmpLongjmp(tmpDir, wasmAs) {
+async function assertSetjmpLongjmp(tmpDir) {
   const src = path.join(tmpDir, 'sjlj.c');
   const wat = path.join(tmpDir, 'sjlj.wat');
   const wasm = path.join(tmpDir, 'sjlj.wasm');
@@ -215,7 +201,7 @@ async function assertSetjmpLongjmp(tmpDir, wasmAs) {
              text.includes('(import "libc" "__wasm_longjmp_tag" (tag $__wasm_longjmp_tag (param i32)))'));
   assertTrue('setjmp app catches longjmp tag',
              text.includes('(catch $__wasm_longjmp_tag'));
-  run(wasmAs, ['--enable-exception-handling', wat, '-o', wasm], { cwd: tmpDir });
+  await assembleWat(wat, wasm);
 
   const rt = await Runtime.AppRuntime.create({ libc: path.join(ROOT, 'libc.wasm') });
   const result = await rt.run(fs.readFileSync(wasm), { args: ['sjlj'] });
@@ -226,13 +212,12 @@ async function assertSetjmpLongjmp(tmpDir, wasmAs) {
 
 (async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tcc-wasm-runtime-'));
-  const wasmAs = findWasmAs();
   const appC = path.join(tmpDir, 'app.c');
   const appWat = path.join(tmpDir, 'app.wat');
   const appWasm = path.join(tmpDir, 'app.wasm');
 
   assertImportedVarargs(tmpDir);
-  await assertSetjmpLongjmp(tmpDir, wasmAs);
+  await assertSetjmpLongjmp(tmpDir);
 
   fs.writeFileSync(appC, APP_SOURCE);
   run(path.join(ROOT, 'wasm32-tcc'), [
@@ -243,7 +228,7 @@ async function assertSetjmpLongjmp(tmpDir, wasmAs) {
     appWat,
     appC
   ]);
-  run(wasmAs, [appWat, '-o', appWasm], { cwd: tmpDir });
+  await assembleWat(appWat, appWasm);
 
   const libcMod = await WebAssembly.compile(fs.readFileSync(path.join(ROOT, 'libc.wasm')));
   const appMod = await WebAssembly.compile(fs.readFileSync(appWasm));

@@ -1,8 +1,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const Runtime = require('../../web/runtime.js');
+const { assembleWat } = require('./assemble_wat.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const compilerPath = process.argv[2] || path.join(ROOT, 'web/tcc.wasm');
@@ -53,35 +53,6 @@ function assertEq(name, got, expected) {
     throw new Error(`${name}: got ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`);
 }
 
-function findWasmAs() {
-  const candidates = [];
-  if (process.env.WASM_AS)
-    candidates.push(process.env.WASM_AS);
-  candidates.push('wasm-as');
-  if (process.env.HOME)
-    candidates.push(path.join(process.env.HOME, 'emsdk/upstream/bin/wasm-as'));
-
-  for (const candidate of candidates) {
-    const result = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
-    if (!result.error && result.status === 0)
-      return candidate;
-  }
-  throw new Error('wasm-as not found; set WASM_AS=/path/to/wasm-as');
-}
-
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: ROOT,
-    encoding: 'utf8',
-    ...options
-  });
-  if (result.status !== 0) {
-    process.stderr.write(result.stdout || '');
-    process.stderr.write(result.stderr || '');
-    throw new Error(`${command} ${args.join(' ')} failed`);
-  }
-}
-
 (async () => {
   const compiler = await Runtime.CompilerHost.create({ wasm: compilerPath });
   const appRuntime = await Runtime.AppRuntime.create({ libc: libcPath });
@@ -99,7 +70,7 @@ function run(command, args, options = {}) {
   const watPath = path.join(tmpDir, 'app.wat');
   const wasmPath = path.join(tmpDir, 'app.wasm');
   fs.writeFileSync(watPath, wat);
-  run(findWasmAs(), [watPath, '-o', wasmPath], { cwd: tmpDir });
+  await assembleWat(watPath, wasmPath);
 
   const result = await appRuntime.run(fs.readFileSync(wasmPath), {
     stdin: '2 40\n'

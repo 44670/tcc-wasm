@@ -72,6 +72,7 @@ tests/vla_test
 tests/hello
 tests/tests2/fred.txt
 libtcc.dylib
+node_modules/
 web/tcc-wasm-bare.html
 web/tcc-wasm-demo.html
 web/libc.wasm

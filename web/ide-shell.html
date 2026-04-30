@@ -329,7 +329,16 @@ int main(void)
 
     async function assembleWat(wat) {
       const wabt = await loadWabt();
-      const module = wabt.parseWat("input.wat", wat);
+      const features = {
+        exceptions: true,
+        mutable_globals: true,
+        sat_float_to_int: true,
+        sign_extension: true,
+        multi_value: true,
+        bulk_memory: true,
+        reference_types: true
+      };
+      const module = wabt.parseWat("input.wat", wat, features);
       try {
         module.resolveNames();
         module.validate();

@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "devDependencies": {
+    "wabt": "1.0.37"
+  }
+}

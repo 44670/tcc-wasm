@@ -3,6 +3,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const Runtime = require('../../web/runtime.js');
+const { assembleWat } = require('./assemble_wat.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const decoder = new TextDecoder();
@@ -103,22 +104,6 @@ const EXPECTED_STDOUT =
   'v:11 ok 0xbeef\n' +
   'vsnprintf:vbuf:00ff/z   :14\n';
 
-function findWasmAs() {
-  const candidates = [];
-  if (process.env.WASM_AS)
-    candidates.push(process.env.WASM_AS);
-  candidates.push('wasm-as');
-  if (process.env.HOME)
-    candidates.push(path.join(process.env.HOME, 'emsdk/upstream/bin/wasm-as'));
-
-  for (const candidate of candidates) {
-    const result = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
-    if (!result.error && result.status === 0)
-      return candidate;
-  }
-  throw new Error('wasm-as not found; set WASM_AS=/path/to/wasm-as');
-}
-
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: ROOT,
@@ -144,7 +129,6 @@ function readString(memory, ptr, len) {
 
 (async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tcc-wasm-printf-'));
-  const wasmAs = findWasmAs();
   const cPath = path.join(tmpDir, 'printf_family.c');
   const watPath = path.join(tmpDir, 'printf_family.wat');
   const wasmPath = path.join(tmpDir, 'printf_family.wasm');
@@ -158,7 +142,7 @@ function readString(memory, ptr, len) {
     watPath,
     cPath
   ]);
-  run(wasmAs, [watPath, '-o', wasmPath], { cwd: tmpDir });
+  await assembleWat(watPath, wasmPath);
 
   const libcMod = await WebAssembly.compile(fs.readFileSync(path.join(ROOT, 'libc.wasm')));
   const appMod = await WebAssembly.compile(fs.readFileSync(wasmPath));

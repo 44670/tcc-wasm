@@ -287,6 +287,8 @@ $(CROSS_TARGET)-tcc$(EXESUF): $(TCC_FILES)
 
 EMCC ?= emcc
 WASM_AS ?= $(or $(shell command -v wasm-as 2>/dev/null),$(wildcard $(HOME)/emsdk/upstream/bin/wasm-as),wasm-as)
+WASM_ASSEMBLER ?= wabt
+WASM_ASSEMBLE = WASM_AS="$(WASM_AS)" WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/assemble_wat.js
 WASM_HOST_DEFINES = -DONE_SOURCE=1 -DTCC_TARGET_WASM32
 WASM_HOST_DEFINES += -DCONFIG_TCC_CROSSPREFIX="\"wasm32-\""
 WASM_HOST_DEFINES += -DCONFIG_TCCDIR="\"/\""
@@ -299,7 +301,6 @@ WASM_IDE_LIBC_WASM = web/libc.wasm
 WASM_LIBC_SRC = lib/wasm32-libc.c
 WASM_LIBC_WAT = libc.wat
 WASM_LIBC_WASM = libc.wasm
-WASM_AS_EHFLAGS = --enable-exception-handling
 WASM_LUA_DIR = tests/lua
 WASM_LUA_SRC_DIR = $(WASM_LUA_DIR)/src/lua-5.1.5/src
 WASM_LUA_WAT = $(WASM_LUA_DIR)/lua.wat
@@ -330,33 +331,33 @@ $(WASM_LIBC_WAT): $(WASM_LIBC_SRC) wasm32-tcc$(EXESUF)
 	$S./wasm32-tcc$(EXESUF) -nostdinc -nostdlib -Wl,--wasm-libc -o $@ $<
 
 $(WASM_LIBC_WASM): $(WASM_LIBC_WAT)
-	$S$(WASM_AS) $(WASM_AS_EHFLAGS) $< -o $@
+	$S$(WASM_ASSEMBLE) --exceptions $< $@
 
 wasm-libc-test: $(WASM_LIBC_WASM) tests/wasm32/libc_smoke.js
 	@node tests/wasm32/libc_smoke.js $(WASM_LIBC_WASM)
 
 wasm-runtime-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/shared_runtime_smoke.js tests/wasm32/runtime_host_errors.js web/runtime.js
-	@node tests/wasm32/shared_runtime_smoke.js
-	@node tests/wasm32/runtime_host_errors.js $(WASM_LIBC_WASM)
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/shared_runtime_smoke.js
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/runtime_host_errors.js $(WASM_LIBC_WASM)
 
 $(WASM_LUA_WAT): $(WASM_LUA_DIR)/lua_wasm_all.c wasm32-tcc$(EXESUF)
 	$S./wasm32-tcc$(EXESUF) $(WASM_LUA_TCCFLAGS) -o $@ $<
 
 $(WASM_LUA_WASM): $(WASM_LUA_WAT)
-	$S$(WASM_AS) $(WASM_AS_EHFLAGS) $< -o $@
+	$S$(WASM_ASSEMBLE) --exceptions $< $@
 
 wasm-lua-test: $(WASM_LIBC_WASM) $(WASM_LUA_WASM) tests/lua/lua_node_repl.js tests/lua/lua_internal_tests.js web/runtime.js
 	@node tests/lua/lua_node_repl.js $(WASM_LUA_WASM) $(WASM_LIBC_WASM)
 	@node tests/lua/lua_internal_tests.js $(WASM_LUA_WASM) $(WASM_LIBC_WASM)
 
 wasm-printf-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/printf_family.js
-	@node tests/wasm32/printf_family.js
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/printf_family.js
 
 wasm-scanf-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/scanf_family.js web/runtime.js
-	@node tests/wasm32/scanf_family.js
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/scanf_family.js
 
 wasm-ide-test: wasm-ide tests/wasm32/ide_smoke.js
-	@node tests/wasm32/ide_smoke.js $(WASM_IDE_TCC_WASM) $(WASM_IDE_LIBC_WASM)
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/ide_smoke.js $(WASM_IDE_TCC_WASM) $(WASM_IDE_LIBC_WASM)
 
 # profiling version
 tcc_p$(EXESUF): $($T_FILES)
@@ -537,9 +538,9 @@ test:
 	@$(MAKE) -C tests
 # run wasm32 backend tests
 wasm-test wasm32-test: tests/wasm32/run.sh
-	@tests/wasm32/run.sh
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" tests/wasm32/run.sh
 wasm-algorithm-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/algorithm_cases.js
-	@node tests/wasm32/algorithm_cases.js
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/algorithm_cases.js
 # run test(s) from tests2 subdir (see make help)
 tests2.%:
 	@$(MAKE) -C tests/tests2 $@
@@ -610,6 +611,7 @@ help:
 	@echo "   prepare web/ide-shell.html plus sibling tcc.wasm/libc.wasm artifacts"
 	@echo "make wasm-libc / make wasm-libc-test"
 	@echo "   build and test libc.wasm using the wasm32 TCC backend"
+	@echo "   wasm tests assemble WAT with WABT by default; run npm install first"
 	@echo "make wasm-runtime-test"
 	@echo "   instantiate libc.wasm and an app wasm with one shared memory"
 	@echo "make wasm-printf-test"

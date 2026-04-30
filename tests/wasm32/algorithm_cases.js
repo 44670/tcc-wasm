@@ -3,6 +3,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const Runtime = require('../../web/runtime.js');
+const { assembleWat } = require('./assemble_wat.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const encoder = new TextEncoder();
@@ -247,22 +248,6 @@ int main(void)
   }
 ];
 
-function findWasmAs() {
-  const candidates = [];
-  if (process.env.WASM_AS)
-    candidates.push(process.env.WASM_AS);
-  candidates.push('wasm-as');
-  if (process.env.HOME)
-    candidates.push(path.join(process.env.HOME, 'emsdk/upstream/bin/wasm-as'));
-
-  for (const candidate of candidates) {
-    const result = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
-    if (!result.error && result.status === 0)
-      return candidate;
-  }
-  throw new Error('wasm-as not found; set WASM_AS=/path/to/wasm-as');
-}
-
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: ROOT,
@@ -287,7 +272,7 @@ function readString(memory, ptr, len) {
   return decoder.decode(new Uint8Array(memory.buffer).subarray(ptr, ptr + len));
 }
 
-async function runCase(tmpDir, wasmAs, libcMod, test) {
+async function runCase(tmpDir, libcMod, test) {
   const cPath = path.join(tmpDir, `${test.name}.c`);
   const watPath = path.join(tmpDir, `${test.name}.wat`);
   const wasmPath = path.join(tmpDir, `${test.name}.wasm`);
@@ -302,7 +287,7 @@ async function runCase(tmpDir, wasmAs, libcMod, test) {
     watPath,
     cPath
   ]);
-  run(wasmAs, [watPath, '-o', wasmPath], { cwd: tmpDir });
+  await assembleWat(watPath, wasmPath);
 
   const appMod = await WebAssembly.compile(fs.readFileSync(wasmPath));
   const memory = new WebAssembly.Memory({ initial: 4096, maximum: 4096 });
@@ -340,12 +325,11 @@ async function runCase(tmpDir, wasmAs, libcMod, test) {
 }
 
 (async () => {
-  const wasmAs = findWasmAs();
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tcc-wasm-algorithms-'));
   const libcMod = await WebAssembly.compile(fs.readFileSync(path.join(ROOT, 'libc.wasm')));
 
   for (const test of cases)
-    await runCase(tmpDir, wasmAs, libcMod, test);
+    await runCase(tmpDir, libcMod, test);
 
   console.log(`wasm algorithm tests ok (${cases.length} cases)`);
 })().catch(err => {
