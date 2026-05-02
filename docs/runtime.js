@@ -268,25 +268,86 @@
   }
 
   class CompilerHost {
-    constructor(instance) {
-      this.instance = instance;
-      this.exports = instance.exports;
-      this.memory = instance.exports.memory;
+    constructor(module, options = {}) {
+      this.module = module;
+      this.options = options;
+      this.imports = WebAssembly.Module.imports(module);
+      this.usesLibc = this.imports.some(imp => imp.module === "libc");
+      this.pages = options.pages || DEFAULT_PAGES;
+      this.resources = options.resources !== undefined
+        ? options.resources
+        : (typeof globalThis !== "undefined" ? globalThis.TccWasmIdeResources : null);
+      this.libcModule = options.libcModule || null;
+      this.instance = null;
+      this.libc = null;
+      this.exports = null;
+      this.allocExports = null;
+      this.memory = null;
     }
 
     static async create(options = {}) {
       const wasm = options.wasm || "./tcc.wasm";
       const module = await compileModule(wasm);
-      let instance = null;
-      const imports = options.imports || createCompilerImports(() => instance);
-      instance = await WebAssembly.instantiate(module, imports);
-      const host = new CompilerHost(instance);
-      host.initialize();
-      host.seedResources(
-        options.resources !== undefined
-          ? options.resources
-          : (typeof globalThis !== "undefined" ? globalThis.TccWasmIdeResources : null));
+      const host = new CompilerHost(module, options);
+      if (host.usesLibc)
+        host.libcModule = await compileModule(options.libc || "./libc.wasm");
+      await host.reset();
       return host;
+    }
+
+    async reset(options = {}) {
+      if (Object.prototype.hasOwnProperty.call(options, "resources"))
+        this.resources = options.resources;
+      if (this.usesLibc)
+        await this.instantiateWithLibc();
+      else
+        await this.instantiateStandalone();
+      this.initialize();
+      this.seedResources(this.resources);
+      return this;
+    }
+
+    async instantiateStandalone() {
+      let instance = null;
+      const imports = this.options.imports || createCompilerImports(() => instance);
+      instance = await WebAssembly.instantiate(this.module, imports);
+      this.instance = instance;
+      this.libc = null;
+      this.exports = instance.exports;
+      this.allocExports = instance.exports;
+      this.memory = instance.exports.memory;
+      if (!this.memory)
+        throw new Error("compiler module did not export memory");
+    }
+
+    async instantiateWithLibc() {
+      const memory = new WebAssembly.Memory({
+        initial: this.pages,
+        maximum: this.pages
+      });
+      const libc = await WebAssembly.instantiate(this.libcModule,
+        createLibcImports(memory, this.options));
+      const libcImports = createAppLibcImports(memory, libc.exports);
+      for (const imp of this.imports) {
+        if (imp.module === "libc" && !(imp.name in libcImports))
+          throw new Error(`compiler imports unavailable libc symbol: ${imp.name}`);
+      }
+      const env = Object.assign({ memory }, this.options.env || {});
+      const instance = await WebAssembly.instantiate(this.module, {
+        env,
+        libc: libcImports
+      });
+      this.instance = instance;
+      this.libc = libc;
+      this.exports = instance.exports;
+      this.allocExports = libc.exports;
+      this.memory = memory;
+      const heapBase = valueOf(instance.exports.__heap_base);
+      const heapEnd = valueOf(instance.exports.__heap_end);
+      if (heapBase === undefined || heapEnd === undefined)
+        throw new Error("compiler module did not export heap bounds");
+      if (libc.exports.rt_init_heap(heapBase, heapEnd) !== 0)
+        throw new Error("could not initialize compiler heap");
     }
 
     initialize() {
@@ -300,6 +361,26 @@
       return this.exports[name] || this.exports[`_${name}`];
     }
 
+    allocExp(name) {
+      return this.allocExports[name] || this.allocExports[`_${name}`];
+    }
+
+    malloc(size) {
+      const malloc = this.allocExp("malloc");
+      if (typeof malloc !== "function")
+        throw new Error("compiler allocator does not export malloc");
+      const ptr = malloc(size);
+      if (!ptr)
+        throw new Error("compiler malloc failed");
+      return ptr;
+    }
+
+    free(ptr) {
+      const free = this.allocExp("free");
+      if (ptr && typeof free === "function")
+        free(ptr);
+    }
+
     memoryBytes() {
       return bytes(this.memory);
     }
@@ -310,9 +391,7 @@
 
     writeCString(text) {
       const raw = encoder.encode(text);
-      const ptr = this.exp("malloc")(raw.length + 1);
-      if (!ptr)
-        throw new Error("compiler malloc failed");
+      const ptr = this.malloc(raw.length + 1);
       const mem = this.memoryBytes();
       mem.set(raw, ptr);
       mem[ptr + raw.length] = 0;
@@ -326,16 +405,11 @@
       if (typeof addResource !== "function")
         throw new Error("compiler does not support virtual resources");
       const files = resources.files || resources;
-      const free = this.exp("free");
       for (const name of Object.keys(files).sort()) {
         const data = files[name];
         const raw = encoder.encode(typeof data === "string" ? data : String(data));
         const namePtr = this.writeCString(name);
-        const dataPtr = this.exp("malloc")(raw.length + 1);
-        if (!dataPtr) {
-          free(namePtr);
-          throw new Error("compiler malloc failed");
-        }
+        const dataPtr = this.malloc(raw.length + 1);
         try {
           const mem = this.memoryBytes();
           mem.set(raw, dataPtr);
@@ -343,8 +417,8 @@
           if (addResource(namePtr, dataPtr, raw.length) !== 0)
             throw new Error(`could not add compiler resource: ${name}`);
         } finally {
-          free(dataPtr);
-          free(namePtr);
+          this.free(dataPtr);
+          this.free(namePtr);
         }
       }
     }
@@ -366,14 +440,13 @@
 
     compileWithOptionsResult(source, options) {
       const compile = this.exp("tcc_bare_compile_with_options");
-      const free = this.exp("free");
       const sourcePtr = this.writeCString(source);
       const optionsPtr = this.writeCString(options || "");
       try {
         return this.readCompileResult(compile(sourcePtr, optionsPtr));
       } finally {
-        free(optionsPtr);
-        free(sourcePtr);
+        this.free(optionsPtr);
+        this.free(sourcePtr);
       }
     }
 
@@ -383,12 +456,11 @@
 
     compileResult(source) {
       const compile = this.exp("tcc_bare_compile");
-      const free = this.exp("free");
       const sourcePtr = this.writeCString(source);
       try {
         return this.readCompileResult(compile(sourcePtr));
       } finally {
-        free(sourcePtr);
+        this.free(sourcePtr);
       }
     }
 
@@ -398,12 +470,11 @@
 
     compileAppResult(source) {
       const compile = this.exp("tcc_bare_compile_app");
-      const free = this.exp("free");
       const sourcePtr = this.writeCString(source);
       try {
         return this.readCompileResult(compile(sourcePtr));
       } finally {
-        free(sourcePtr);
+        this.free(sourcePtr);
       }
     }
 

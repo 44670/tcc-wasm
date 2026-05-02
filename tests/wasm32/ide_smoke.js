@@ -114,6 +114,7 @@ function assertEq(name, got, expected) {
 (async () => {
   const compiler = await Runtime.CompilerHost.create({
     wasm: compilerPath,
+    libc: libcPath,
     resources: IdeResources
   });
   const appRuntime = await Runtime.AppRuntime.create({ libc: libcPath });
@@ -135,11 +136,15 @@ function assertEq(name, got, expected) {
   assertTrue('compile result should keep warnings',
              /warning: implicit declaration of function 'scanf'/.test(
                warningResult.diagnostics));
+  await compiler.reset();
+  const resetWat = compiler.compileApp(SOURCE);
+  assertTrue('compiler reset should preserve seeded headers and app mode',
+             resetWat.includes('(import "libc" "scanf"'));
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tcc-wasm-ide-'));
   const watPath = path.join(tmpDir, 'app.wat');
   const wasmPath = path.join(tmpDir, 'app.wasm');
-  fs.writeFileSync(watPath, wat);
+  fs.writeFileSync(watPath, resetWat);
   await assembleWat(watPath, wasmPath);
 
   const result = await appRuntime.run(fs.readFileSync(wasmPath), {

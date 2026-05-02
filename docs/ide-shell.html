@@ -491,6 +491,7 @@ int main(void)
     let wabtPromise;
     let compiledWat = "";
     let compiledBinary = null;
+    let compiledModule = null;
 
     function setStatus(text, isError) {
       statusEl.textContent = text;
@@ -500,6 +501,7 @@ int main(void)
     function invalidateBuild(status) {
       compiledWat = "";
       compiledBinary = null;
+      compiledModule = null;
       watEl.value = "";
       binarySizeEl.textContent = "";
       returnCodeEl.textContent = "";
@@ -571,6 +573,7 @@ int main(void)
       watEl.value = formatWatPane(result);
       setStatus("Assembling");
       compiledBinary = await assembleWat(compiledWat);
+      compiledModule = await WebAssembly.compile(compiledBinary);
       binarySizeEl.textContent = `${compiledBinary.length} bytes`;
       runButton.disabled = false;
       setStatus("Compiled");
@@ -578,13 +581,13 @@ int main(void)
     }
 
     async function runProgram() {
-      if (!compiledBinary)
+      if (!compiledModule)
         await compile();
       runButton.disabled = true;
       stdoutEl.value = "";
       returnCodeEl.textContent = "";
       setStatus("Running");
-      const result = await appRuntime.run(compiledBinary, { stdin: stdinEl.value });
+      const result = await appRuntime.run(compiledModule, { stdin: stdinEl.value });
       stdoutEl.value = result.stderr ? `${result.stdout}\n[stderr]\n${result.stderr}` : result.stdout;
       stdoutEl.scrollTop = stdoutEl.scrollHeight;
       returnCodeEl.textContent = `rc ${result.rc}`;
@@ -599,6 +602,7 @@ int main(void)
       [compiler, appRuntime] = await Promise.all([
         TccWasmRuntime.CompilerHost.create({
           wasm: "./tcc.wasm",
+          libc: "./libc.wasm",
           resources: TccWasmIdeResources
         }),
         TccWasmRuntime.AppRuntime.create({ libc: "./libc.wasm" })

@@ -1,10 +1,7 @@
 /*
- * Browser wrapper for the experimental wasm32 backend without Emscripten's
- * JS runtime, MEMFS, ccall, or generated Module object.
- *
- * Emscripten is still used as a C-to-wasm compiler for TCC itself.  The host
- * page loads the resulting wasm module directly and copies source/output bytes
- * through linear memory.
+ * Browser wrapper for the experimental wasm32 backend without MEMFS, ccall,
+ * or a generated Module object.  The host page loads the wasm module directly
+ * and copies source/output bytes through linear memory.
  */
 
 #define TCC_BARE_RESOURCE_OPEN 1

@@ -74,3 +74,4 @@ tests/tests2/fred.txt
 libtcc.dylib
 node_modules/
 ref/
+docs/tcc.wat

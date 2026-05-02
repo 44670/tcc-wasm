@@ -285,7 +285,6 @@ tcc$(EXESUF): tcc.o $(LIBTCC)
 $(CROSS_TARGET)-tcc$(EXESUF): $(TCC_FILES)
 	$S$(CC) -o $@ $^ $(LIBS) $(LDFLAGS)
 
-EMCC ?= emcc
 WASM_AS ?= $(or $(shell command -v wasm-as 2>/dev/null),$(wildcard $(HOME)/emsdk/upstream/bin/wasm-as),wasm-as)
 WASM_ASSEMBLER ?= wabt
 WASM_ASSEMBLE = WASM_AS="$(WASM_AS)" WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/assemble_wat.js
@@ -296,6 +295,7 @@ WASM_HOST_DEFINES += -DCONFIG_TCC_SYSINCLUDEPATHS="\"/include\""
 WASM_HOST_DEFINES += -DCONFIG_TCC_LIBPATHS="\"/\""
 WASM_HOST_DEFINES += -DTCC_GITHASH="\"browser\""
 WASM_IDE_SHELL = docs/ide-shell.html
+WASM_IDE_TCC_WAT = docs/tcc.wat
 WASM_IDE_TCC_WASM = docs/tcc.wasm
 WASM_IDE_LIBC_WASM = docs/libc.wasm
 WASM_IDE_RESOURCES_JS = docs/ide-resources.js
@@ -309,11 +309,9 @@ WASM_LUA_WAT = $(WASM_LUA_DIR)/lua.wat
 WASM_LUA_WASM = $(WASM_LUA_DIR)/lua.wasm
 WASM_LUA_TCCFLAGS = -nostdinc -nostdlib -Wl,--wasm-app
 WASM_LUA_TCCFLAGS += -Iinclude -I$(WASM_LUA_DIR) -I$(WASM_LUA_SRC_DIR)
-WASM_COMPILER_EMFLAGS = -O2 -fcommon -I$(TOP) $(WASM_HOST_DEFINES)
-WASM_COMPILER_EMFLAGS += --no-entry -sSTANDALONE_WASM=1 -sFILESYSTEM=0
-WASM_COMPILER_EMFLAGS += -fwasm-exceptions -sSUPPORT_LONGJMP=wasm
-WASM_COMPILER_EMFLAGS += -sINITIAL_MEMORY=268435456 -sALLOW_MEMORY_GROWTH=0
-WASM_COMPILER_EMFLAGS += -sEXPORTED_FUNCTIONS='["_malloc","_free","_tcc_bare_add_resource","_tcc_bare_compile","_tcc_bare_compile_app","_tcc_bare_compile_with_options","_tcc_bare_output","_tcc_bare_output_len","_tcc_bare_error","_tcc_bare_error_len"]'
+WASM_COMPILER_TCCFLAGS = -nostdinc -Iinclude -I. $(WASM_HOST_DEFINES)
+WASM_COMPILER_TCCFLAGS += -DCONFIG_TCC_STATIC -DCONFIG_TCC_SEMLOCK=0 -Dinline=
+WASM_COMPILER_TCCFLAGS += -Wl,--wasm-app
 
 wasm-compiler: $(WASM_IDE_TCC_WASM)
 wasm-ide: $(WASM_IDE_SHELL) docs/runtime.js docs/editor.js $(WASM_IDE_RESOURCES_JS) $(WASM_IDE_TCC_WASM) $(WASM_IDE_LIBC_WASM)
@@ -321,14 +319,17 @@ wasm-ide: $(WASM_IDE_SHELL) docs/runtime.js docs/editor.js $(WASM_IDE_RESOURCES_
 $(WASM_IDE_RESOURCES_JS): docs/build-ide-resources.js $(WASM_IDE_RESOURCE_INPUTS)
 	$Snode docs/build-ide-resources.js $@
 
-$(WASM_IDE_TCC_WASM): docs/tcc_browser_bare.c $(wasm32_FILES) $(TCCDEFS_H)
-	$S$(EMCC) docs/tcc_browser_bare.c -o $@ $(WASM_COMPILER_EMFLAGS)
+$(WASM_IDE_TCC_WAT): docs/tcc_browser_bare.c $(wasm32_FILES) $(TCCDEFS_H) wasm32-tcc$(EXESUF)
+	$S./wasm32-tcc$(EXESUF) $(WASM_COMPILER_TCCFLAGS) -o $@ $<
+
+$(WASM_IDE_TCC_WASM): $(WASM_IDE_TCC_WAT)
+	$S$(WASM_ASSEMBLE) --exceptions $< $@
 
 $(WASM_IDE_LIBC_WASM): $(WASM_LIBC_WASM)
 	$Scp $< $@
 
-wasm-compiler-test: $(WASM_IDE_TCC_WASM) tests/wasm32/bare_browser_smoke.js
-	@node tests/wasm32/bare_browser_smoke.js $(WASM_IDE_TCC_WASM)
+wasm-compiler-test: $(WASM_IDE_TCC_WASM) $(WASM_IDE_LIBC_WASM) tests/wasm32/bare_browser_smoke.js
+	@node tests/wasm32/bare_browser_smoke.js $(WASM_IDE_TCC_WASM) $(WASM_IDE_LIBC_WASM)
 
 wasm-selfhost-compiler-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) docs/tcc_browser_bare.c tests/wasm32/selfhost_compiler_smoke.js
 	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/selfhost_compiler_smoke.js
@@ -577,7 +578,7 @@ clean:
 	@rm -f tcc *-tcc tcc_p tcc_c tcc_s
 	@rm -f tags ETAGS *.o *.a *.so* *.out *.log lib*.def *.exe *.dll
 	@rm -f a.out *.dylib *_.h *.pod *.tcov
-	@rm -f docs/ide.html docs/tcc.wasm docs/libc.wasm docs/ide-resources.js
+	@rm -f docs/ide.html docs/tcc.wat docs/tcc.wasm docs/libc.wasm docs/ide-resources.js
 	@rm -f libc.wat libc.wasm
 	@rm -f tests/lua/lua.wat tests/lua/lua.wasm
 	@$(MAKE) -s -C lib $@
