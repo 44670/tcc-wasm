@@ -75,5 +75,6 @@ libtcc.dylib
 node_modules/
 web/tcc-wasm-bare.html
 web/tcc-wasm-demo.html
+web/ide-resources.js
 web/libc.wasm
 web/tcc.wasm

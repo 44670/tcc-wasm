@@ -282,6 +282,10 @@
       instance = await WebAssembly.instantiate(module, imports);
       const host = new CompilerHost(instance);
       host.initialize();
+      host.seedResources(
+        options.resources !== undefined
+          ? options.resources
+          : (typeof globalThis !== "undefined" ? globalThis.TccWasmIdeResources : null));
       return host;
     }
 
@@ -313,6 +317,36 @@
       mem.set(raw, ptr);
       mem[ptr + raw.length] = 0;
       return ptr;
+    }
+
+    seedResources(resources) {
+      if (!resources)
+        return;
+      const addResource = this.exp("tcc_bare_add_resource");
+      if (typeof addResource !== "function")
+        throw new Error("compiler does not support virtual resources");
+      const files = resources.files || resources;
+      const free = this.exp("free");
+      for (const name of Object.keys(files).sort()) {
+        const data = files[name];
+        const raw = encoder.encode(typeof data === "string" ? data : String(data));
+        const namePtr = this.writeCString(name);
+        const dataPtr = this.exp("malloc")(raw.length + 1);
+        if (!dataPtr) {
+          free(namePtr);
+          throw new Error("compiler malloc failed");
+        }
+        try {
+          const mem = this.memoryBytes();
+          mem.set(raw, dataPtr);
+          mem[dataPtr + raw.length] = 0;
+          if (addResource(namePtr, dataPtr, raw.length) !== 0)
+            throw new Error(`could not add compiler resource: ${name}`);
+        } finally {
+          free(dataPtr);
+          free(namePtr);
+        }
+      }
     }
 
     compileWithOptions(source, options) {

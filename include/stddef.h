@@ -5,8 +5,11 @@ typedef __SIZE_TYPE__ size_t;
 typedef __PTRDIFF_TYPE__ ssize_t;
 typedef __WCHAR_TYPE__ wchar_t;
 typedef __PTRDIFF_TYPE__ ptrdiff_t;
+#ifndef __TCC_INTPTR_TYPEDEF
+#define __TCC_INTPTR_TYPEDEF
 typedef __PTRDIFF_TYPE__ intptr_t;
 typedef __SIZE_TYPE__ uintptr_t;
+#endif
 
 #if __STDC_VERSION__ >= 201112L
 typedef union { long long __ll; long double __ld; } max_align_t;

@@ -2,6 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Runtime = require('../../web/runtime.js');
+const IdeResources = require('../../web/ide-resources.js');
 const { assembleWat } = require('./assemble_wat.js');
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -24,6 +25,8 @@ int main(void)
 `;
 
 const IMPLICIT_STDIO_SOURCE = `
+#include <stdio.h>
+
 int main(void)
 {
     int a = 0;
@@ -101,7 +104,10 @@ function assertEq(name, got, expected) {
 }
 
 (async () => {
-  const compiler = await Runtime.CompilerHost.create({ wasm: compilerPath });
+  const compiler = await Runtime.CompilerHost.create({
+    wasm: compilerPath,
+    resources: IdeResources
+  });
   const appRuntime = await Runtime.AppRuntime.create({ libc: libcPath });
   const wat = compiler.compileApp(SOURCE);
 

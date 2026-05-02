@@ -7,14 +7,84 @@
  * through linear memory.
  */
 
+#define TCC_BARE_RESOURCE_OPEN 1
 #define main tcc_cli_main
 #include "../tcc.c"
 #undef main
 
+typedef struct BareResource {
+    char *path;
+    char *data;
+    int len;
+    struct BareResource *next;
+} BareResource;
+
+static BareResource *bare_resources;
 static char *bare_output;
 static size_t bare_output_len;
 static char *bare_error;
 static size_t bare_error_len;
+
+static BareResource *bare_find_resource(const char *path)
+{
+    BareResource *res;
+
+    for (res = bare_resources; res; res = res->next) {
+        if (!strcmp(res->path, path))
+            return res;
+    }
+    return NULL;
+}
+
+static int tcc_bare_open_resource(TCCState *s1, const char *filename)
+{
+    BareResource *res = bare_find_resource(filename);
+
+    if (!res)
+        return -1;
+    if (s1->verbose == 2 || s1->verbose == 3)
+        printf("-> %*s%s\n",
+               (int)(s1->include_stack_ptr - s1->include_stack), "",
+               filename);
+    tcc_open_bf(s1, filename, res->len);
+    memcpy(file->buffer, res->data, res->len);
+    return 0;
+}
+
+__attribute__((used))
+int tcc_bare_add_resource(const char *path, const char *data, int len)
+{
+    BareResource *res;
+    char *copy;
+
+    if (!path || !*path || !data || len < 0)
+        return -1;
+
+    res = bare_find_resource(path);
+    if (!res) {
+        res = tcc_mallocz(sizeof(*res));
+        if (!res)
+            return -1;
+        res->path = tcc_strdup(path);
+        if (!res->path) {
+            tcc_free(res);
+            return -1;
+        }
+        res->next = bare_resources;
+        bare_resources = res;
+    }
+
+    copy = tcc_malloc(len + 1);
+    if (!copy)
+        return -1;
+    memcpy(copy, data, len);
+    copy[len] = '\0';
+
+    tcc_free(res->data);
+    res->data = copy;
+    res->len = len;
+    return 0;
+}
 
 static void bare_free_result(void)
 {
@@ -136,7 +206,7 @@ __attribute__((used))
 int tcc_bare_compile_app(const char *source)
 {
     return tcc_bare_compile_with_options(source,
-        "-nostdinc -nostdlib -Wl,--wasm-app");
+        "-nostdlib -Wl,--wasm-app");
 }
 
 __attribute__((used))

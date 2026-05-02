@@ -10,6 +10,9 @@
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #f5f6f8;
       color: #171b22;
+      --code-font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      --code-padding: 12px;
+      --code-tab-size: 4;
     }
 
     * {
@@ -151,13 +154,98 @@
       overflow: auto;
       background: #fff;
       color: #111827;
-      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      tab-size: 4;
+      font: var(--code-font);
+      tab-size: var(--code-tab-size);
       white-space: pre;
     }
 
     textarea[readonly] {
       background: #fcfdff;
+    }
+
+    .code-editor {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .code-editor:focus-within {
+      box-shadow: inset 0 0 0 2px rgba(31, 111, 235, .24);
+    }
+
+    .code-editor-highlight {
+      position: absolute;
+      inset: 0;
+      margin: 0;
+      border: 0;
+      overflow: hidden;
+      pointer-events: none;
+      background: #fff;
+      color: #111827;
+      font: var(--code-font);
+      tab-size: var(--code-tab-size);
+      white-space: pre;
+    }
+
+    .code-editor-code {
+      display: block;
+      min-width: max-content;
+      min-height: 100%;
+      padding: var(--code-padding);
+      white-space: pre;
+      font: inherit;
+      tab-size: inherit;
+    }
+
+    .code-editor-input {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background: transparent;
+      color: transparent;
+      caret-color: #111827;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .code-editor-input::selection {
+      background: rgba(31, 111, 235, .22);
+      color: transparent;
+    }
+
+    .tok-comment {
+      color: #5f6f52;
+      font-style: italic;
+    }
+
+    .tok-keyword {
+      color: #0f62b8;
+      font-weight: 700;
+    }
+
+    .tok-type {
+      color: #8a4f12;
+      font-weight: 650;
+    }
+
+    .tok-string {
+      color: #a43c32;
+    }
+
+    .tok-number {
+      color: #0b6f73;
+    }
+
+    .tok-preprocessor {
+      color: #6f4aa8;
+      font-weight: 650;
+    }
+
+    .tok-function {
+      color: #244f8f;
     }
 
     @media (max-width: 900px) {
@@ -236,10 +324,11 @@
     </main>
   </div>
 
+  <script src="./ide-resources.js"></script>
   <script src="./runtime.js"></script>
+  <script src="./editor.js"></script>
   <script>
-    const defaultSource = `int scanf(const char *fmt, ...);
-int printf(const char *fmt, ...);
+    const defaultSource = `#include <stdio.h>
 
 int main(void)
 {
@@ -263,6 +352,7 @@ int main(void)
     const resetButton = document.getElementById("reset");
     const binarySizeEl = document.getElementById("binary-size");
     const returnCodeEl = document.getElementById("return-code");
+    const sourceEditor = TccWasmEditor.createCodeEditor(sourceEl);
 
     let compiler;
     let appRuntime;
@@ -361,9 +451,13 @@ int main(void)
 
     async function boot() {
       sourceEl.value = defaultSource;
+      sourceEditor.refresh();
       stdinEl.value = defaultStdin;
       [compiler, appRuntime] = await Promise.all([
-        TccWasmRuntime.CompilerHost.create({ wasm: "./tcc.wasm" }),
+        TccWasmRuntime.CompilerHost.create({
+          wasm: "./tcc.wasm",
+          resources: TccWasmIdeResources
+        }),
         TccWasmRuntime.AppRuntime.create({ libc: "./libc.wasm" })
       ]);
       compileButton.disabled = false;
@@ -389,6 +483,7 @@ int main(void)
 
     resetButton.addEventListener("click", () => {
       sourceEl.value = defaultSource;
+      sourceEditor.refresh();
       stdinEl.value = defaultStdin;
       stdoutEl.value = "";
       invalidateBuild("Reset");

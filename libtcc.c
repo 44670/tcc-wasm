@@ -783,9 +783,18 @@ static int _tcc_open(TCCState *s1, const char *filename)
     return fd;
 }
 
+#ifdef TCC_BARE_RESOURCE_OPEN
+static int tcc_bare_open_resource(TCCState *s1, const char *filename);
+#endif
+
 ST_FUNC int tcc_open(TCCState *s1, const char *filename)
 {
-    int fd = _tcc_open(s1, filename);
+    int fd;
+#ifdef TCC_BARE_RESOURCE_OPEN
+    if (tcc_bare_open_resource(s1, filename) >= 0)
+        return 0;
+#endif
+    fd = _tcc_open(s1, filename);
     if (fd < 0)
         return -1;
     tcc_open_bf(s1, filename, 0);
