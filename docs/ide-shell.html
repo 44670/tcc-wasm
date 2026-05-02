@@ -13,6 +13,8 @@
       --code-font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       --code-padding: 12px;
       --code-tab-size: 4;
+      --code-gutter-width: 46px;
+      --code-assist-width: 310px;
     }
 
     * {
@@ -173,6 +175,48 @@
       background: #fff;
     }
 
+    .code-editor-line-highlight {
+      position: absolute;
+      left: var(--code-gutter-width);
+      right: 0;
+      top: 0;
+      z-index: 0;
+      height: 18px;
+      pointer-events: none;
+      background: #eaf4ff;
+    }
+
+    .code-editor-gutter {
+      position: absolute;
+      inset: 0 auto 0 0;
+      z-index: 4;
+      width: var(--code-gutter-width);
+      overflow: hidden;
+      border-right: 1px solid #d8dde6;
+      background: #f3f6fa;
+      color: #6b7280;
+      font: var(--code-font);
+      tab-size: var(--code-tab-size);
+      user-select: none;
+    }
+
+    .code-editor-line-numbers {
+      min-height: 100%;
+      padding: var(--code-padding) 8px var(--code-padding) 0;
+      text-align: right;
+      white-space: pre;
+    }
+
+    .code-editor-line-numbers span {
+      display: block;
+      height: 1.45em;
+    }
+
+    .code-editor-line-numbers span.active {
+      color: #111827;
+      font-weight: 700;
+    }
+
     .code-editor:focus-within {
       box-shadow: inset 0 0 0 2px rgba(31, 111, 235, .24);
     }
@@ -180,11 +224,12 @@
     .code-editor-highlight {
       position: absolute;
       inset: 0;
+      z-index: 1;
       margin: 0;
       border: 0;
       overflow: hidden;
       pointer-events: none;
-      background: #fff;
+      background: transparent;
       color: #111827;
       font: var(--code-font);
       tab-size: var(--code-tab-size);
@@ -196,6 +241,7 @@
       min-width: max-content;
       min-height: 100%;
       padding: var(--code-padding);
+      padding-left: calc(var(--code-gutter-width) + var(--code-padding));
       white-space: pre;
       font: inherit;
       tab-size: inherit;
@@ -204,7 +250,8 @@
     .code-editor-input {
       position: absolute;
       inset: 0;
-      z-index: 1;
+      z-index: 3;
+      padding-left: calc(var(--code-gutter-width) + var(--code-padding));
       background: transparent;
       color: transparent;
       caret-color: #111827;
@@ -214,6 +261,91 @@
     .code-editor-input::selection {
       background: rgba(31, 111, 235, .22);
       color: transparent;
+    }
+
+    .code-editor-popup,
+    .code-editor-hint {
+      position: absolute;
+      z-index: 5;
+      width: min(var(--code-assist-width), calc(100% - var(--code-gutter-width) - 12px));
+      border: 1px solid #aeb8c7;
+      border-radius: 6px;
+      background: #fff;
+      box-shadow: 0 14px 34px rgba(15, 23, 42, .18);
+      font: 12px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .code-editor-popup[hidden],
+    .code-editor-hint[hidden] {
+      display: none;
+    }
+
+    .code-editor-popup {
+      max-height: 216px;
+      overflow: auto;
+      padding: 4px;
+    }
+
+    .code-editor-completion {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 26px;
+      padding: 4px 7px;
+      border-radius: 4px;
+      color: #111827;
+      cursor: default;
+    }
+
+    .code-editor-completion.active {
+      background: #1f6feb;
+      color: #fff;
+    }
+
+    .code-editor-completion-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 650;
+    }
+
+    .code-editor-completion-kind {
+      color: #64748b;
+      font-size: 11px;
+    }
+
+    .code-editor-completion.active .code-editor-completion-kind {
+      color: rgba(255, 255, 255, .78);
+    }
+
+    .code-editor-hint {
+      padding: 8px 9px;
+      color: #263241;
+    }
+
+    .code-editor-hint-signature {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font: var(--code-font);
+      font-weight: 700;
+      color: #111827;
+    }
+
+    .code-editor-hint-detail {
+      margin-top: 3px;
+      color: #4b5563;
+    }
+
+    .code-editor-measure {
+      position: absolute;
+      visibility: hidden;
+      pointer-events: none;
+      white-space: pre;
+      font: var(--code-font);
+      tab-size: var(--code-tab-size);
     }
 
     .tok-comment {

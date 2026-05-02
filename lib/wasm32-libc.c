@@ -93,6 +93,9 @@ int rt_host_read(int fd, void *dst, size_t len);
 int rt_host_write(int fd, const void *src, size_t len);
 int rt_host_isatty(int fd);
 void rt_host_exit(int code);
+void *malloc(size_t size);
+void free(void *ptr);
+void *realloc(void *ptr, size_t size);
 int vsnprintf(char *dst, size_t n, const char *fmt, va_list ap);
 int vsscanf(const char *src, const char *fmt, va_list ap);
 double strtod(const char *s, char **endptr);
@@ -280,6 +283,24 @@ char *strstr(const char *haystack, const char *needle)
     return 0;
 }
 
+char *strdup(const char *s)
+{
+    size_t len = strlen(s);
+    char *copy = malloc(len + 1);
+    if (!copy)
+        return 0;
+    memcpy(copy, s, len + 1);
+    return copy;
+}
+
+size_t strnlen(const char *s, size_t max)
+{
+    size_t n = 0;
+    while (n < max && s[n])
+        ++n;
+    return n;
+}
+
 char *strpbrk(const char *s, const char *accept)
 {
     for (; *s; ++s)
@@ -302,6 +323,33 @@ size_t strcspn(const char *s, const char *reject)
     while (s[n] && !strchr(reject, s[n]))
         ++n;
     return n;
+}
+
+char *strtok_r(char *s, const char *delim, char **saveptr)
+{
+    char *end;
+
+    if (!s)
+        s = *saveptr;
+    s += strspn(s, delim);
+    if (!*s) {
+        *saveptr = s;
+        return 0;
+    }
+    end = s + strcspn(s, delim);
+    if (*end) {
+        *end++ = 0;
+        *saveptr = end;
+    } else {
+        *saveptr = end;
+    }
+    return s;
+}
+
+char *strtok(char *s, const char *delim)
+{
+    static char *saveptr;
+    return strtok_r(s, delim, &saveptr);
 }
 
 char *strerror(int errnum)
@@ -333,6 +381,9 @@ int iscntrl(int c) { c = rt_ascii(c); return c < 32 || c == 127; }
 int isspace(int c) { c = rt_ascii(c); return c == ' ' || (c >= '\t' && c <= '\r'); }
 int isxdigit(int c) { c = rt_ascii(c); return isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 int ispunct(int c) { c = rt_ascii(c); return c > 32 && c < 127 && !isalnum(c); }
+int isblank(int c) { c = rt_ascii(c); return c == ' ' || c == '\t'; }
+int isgraph(int c) { c = rt_ascii(c); return c > 32 && c < 127; }
+int isprint(int c) { c = rt_ascii(c); return c >= 32 && c < 127; }
 int tolower(int c) { return isupper(c) ? c + ('a' - 'A') : c; }
 int toupper(int c) { return islower(c) ? c - ('a' - 'A') : c; }
 
@@ -801,9 +852,9 @@ static int rt_digit_value(int c)
 {
     if (c >= '0' && c <= '9')
         return c - '0';
-    if (c >= 'a' && c <= 'f')
+    if (c >= 'a' && c <= 'z')
         return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F')
+    if (c >= 'A' && c <= 'Z')
         return c - 'A' + 10;
     return -1;
 }
@@ -821,6 +872,9 @@ struct RtScanIn {
 #define RT_SCAN_LEN_H 2
 #define RT_SCAN_LEN_L 3
 #define RT_SCAN_LEN_LL 4
+#define RT_SCAN_LEN_INTMAX 5
+#define RT_SCAN_LEN_SIZE 6
+#define RT_SCAN_LEN_PTRDIFF 7
 
 static int rt_scan_peek_at(struct RtScanIn *in, size_t off)
 {
@@ -861,13 +915,13 @@ static int rt_scan_finish(struct RtScanIn *in, int assigned)
 }
 
 static int rt_scan_parse_number(struct RtScanIn *in, int spec, int width,
-                                unsigned int *out, int *negative)
+                                unsigned long long *out, int *negative)
 {
     size_t token_start = in->pos;
     int limit = width > 0 ? width : 0x7fffffff;
     int base;
     int digits = 0;
-    unsigned int value = 0;
+    unsigned long long value = 0;
     int c;
     int d;
 
@@ -926,16 +980,22 @@ static int rt_scan_parse_number(struct RtScanIn *in, int spec, int width,
         in->pos = token_start;
         return 0;
     }
-    *out = *negative ? 0u - value : value;
+    *out = *negative ? 0ull - value : value;
     return 1;
 }
 
-static void rt_scan_store_int(void *dst, int length, unsigned int value)
+static void rt_scan_store_int(void *dst, int length, unsigned long long value)
 {
     if (length == RT_SCAN_LEN_HH) {
         *(unsigned char *)dst = (unsigned char)value;
     } else if (length == RT_SCAN_LEN_H) {
         *(unsigned short *)dst = (unsigned short)value;
+    } else if (length == RT_SCAN_LEN_LL || length == RT_SCAN_LEN_INTMAX) {
+        *(unsigned long long *)dst = value;
+    } else if (length == RT_SCAN_LEN_SIZE) {
+        *(size_t *)dst = (size_t)value;
+    } else if (length == RT_SCAN_LEN_PTRDIFF) {
+        *(int *)dst = (int)value;
     } else {
         *(unsigned int *)dst = value;
     }
@@ -1004,8 +1064,17 @@ static int rt_vscan(struct RtScanIn *in, const char *fmt, va_list ap)
             } else {
                 length = RT_SCAN_LEN_L;
             }
+        } else if (*fmt == 'j') {
+            length = RT_SCAN_LEN_INTMAX;
+            ++fmt;
+        } else if (*fmt == 'z') {
+            length = RT_SCAN_LEN_SIZE;
+            ++fmt;
+        } else if (*fmt == 't') {
+            length = RT_SCAN_LEN_PTRDIFF;
+            ++fmt;
         } else {
-            while (*fmt == 'z' || *fmt == 't' || *fmt == 'j' || *fmt == 'L')
+            while (*fmt == 'L')
                 ++fmt;
         }
 
@@ -1015,7 +1084,7 @@ static int rt_vscan(struct RtScanIn *in, const char *fmt, va_list ap)
 
         if (spec == 'd' || spec == 'i' || spec == 'u' || spec == 'x'
             || spec == 'X' || spec == 'o' || spec == 'p') {
-            unsigned int value;
+            unsigned long long value;
             int negative;
             if (!rt_scan_parse_number(in, spec, width, &value, &negative))
                 return rt_scan_finish(in, assigned);
@@ -1127,27 +1196,97 @@ static void rt_fmt_pad(struct RtFmtOut *out, int ch, int count)
         rt_fmt_putc(out, ch);
 }
 
-static int rt_uint_to_digits(char *buf, unsigned int value, unsigned int base,
-                             int upper)
+static void rt_ull_split(unsigned long long value, unsigned int *lo,
+                         unsigned int *hi)
+{
+    union {
+        unsigned long long ull;
+        unsigned int u32[2];
+    } parts;
+
+    parts.ull = value;
+    *lo = parts.u32[0];
+    *hi = parts.u32[1];
+}
+
+static int rt_u64_bit(unsigned int lo, unsigned int hi, int bit)
+{
+    if (bit < 32)
+        return (int)((lo >> bit) & 1u);
+    return (int)((hi >> (bit - 32)) & 1u);
+}
+
+static int rt_ull_to_decimal_digits(char *buf, unsigned long long value)
+{
+    unsigned int lo;
+    unsigned int hi;
+    int count = 1;
+    int bit;
+    int i;
+
+    rt_ull_split(value, &lo, &hi);
+    buf[0] = '0';
+    for (bit = 63; bit >= 0; --bit) {
+        int carry = rt_u64_bit(lo, hi, bit);
+        for (i = 0; i < count; ++i) {
+            int digit = (buf[i] - '0') * 2 + carry;
+            if (digit >= 10) {
+                buf[i] = (char)('0' + digit - 10);
+                carry = 1;
+            } else {
+                buf[i] = (char)('0' + digit);
+                carry = 0;
+            }
+        }
+        if (carry)
+            buf[count++] = '1';
+    }
+    while (count > 1 && buf[count - 1] == '0')
+        --count;
+    return count;
+}
+
+static int rt_ull_to_power2_digits(char *buf, unsigned long long value,
+                                   int shift, const char *digits)
+{
+    unsigned int lo;
+    unsigned int hi;
+    int n = 0;
+    int bit;
+
+    rt_ull_split(value, &lo, &hi);
+    for (bit = 0; bit < 64; bit += shift) {
+        unsigned int digit = 0;
+        int i;
+        for (i = 0; i < shift && bit + i < 64; ++i)
+            digit |= (unsigned int)rt_u64_bit(lo, hi, bit + i) << i;
+        buf[n++] = digits[digit];
+    }
+    while (n > 1 && buf[n - 1] == '0')
+        --n;
+    return n;
+}
+
+static int rt_ull_to_digits(char *buf, unsigned long long value,
+                            unsigned int base, int upper)
 {
     static const char lower_digits[] = "0123456789abcdef";
     static const char upper_digits[] = "0123456789ABCDEF";
     const char *digits = upper ? upper_digits : lower_digits;
-    int n = 0;
 
-    do {
-        buf[n++] = digits[value % base];
-        value /= base;
-    } while (value);
-    return n;
+    if (base == 10)
+        return rt_ull_to_decimal_digits(buf, value);
+    if (base == 16)
+        return rt_ull_to_power2_digits(buf, value, 4, digits);
+    return rt_ull_to_power2_digits(buf, value, 3, digits);
 }
 
-static void rt_fmt_number(struct RtFmtOut *out, unsigned int value,
+static void rt_fmt_number(struct RtFmtOut *out, unsigned long long value,
                           unsigned int base, int negative, int upper,
                           int width, int precision, int left, int zero,
                           int plus, int space, int alt, int pointer)
 {
-    char digits[32];
+    char digits[65];
     char prefix[3];
     int digit_count;
     int prefix_len = 0;
@@ -1175,7 +1314,7 @@ static void rt_fmt_number(struct RtFmtOut *out, unsigned int value,
 
     digit_count = 0;
     if (!(precision == 0 && value == 0))
-        digit_count = rt_uint_to_digits(digits, value, base, upper);
+        digit_count = rt_ull_to_digits(digits, value, base, upper);
 
     zero_count = 0;
     if (precision > digit_count)
@@ -1402,6 +1541,7 @@ static int rt_vformat(struct RtFmtOut *out, const char *fmt, va_list ap)
         int zero;
         int width;
         int precision;
+        int length;
         int done;
         int spec;
 
@@ -1473,41 +1613,138 @@ static int rt_vformat(struct RtFmtOut *out, const char *fmt, va_list ap)
             }
         }
 
-        while (*fmt == 'h' || *fmt == 'l' || *fmt == 'z' || *fmt == 't'
-               || *fmt == 'j' || *fmt == 'L')
+        length = RT_SCAN_LEN_DEFAULT;
+        if (*fmt == 'h') {
             ++fmt;
+            if (*fmt == 'h') {
+                length = RT_SCAN_LEN_HH;
+                ++fmt;
+            } else {
+                length = RT_SCAN_LEN_H;
+            }
+        } else if (*fmt == 'l') {
+            ++fmt;
+            if (*fmt == 'l') {
+                length = RT_SCAN_LEN_LL;
+                ++fmt;
+            } else {
+                length = RT_SCAN_LEN_L;
+            }
+        } else if (*fmt == 'j') {
+            length = RT_SCAN_LEN_INTMAX;
+            ++fmt;
+        } else if (*fmt == 'z') {
+            length = RT_SCAN_LEN_SIZE;
+            ++fmt;
+        } else if (*fmt == 't') {
+            length = RT_SCAN_LEN_PTRDIFF;
+            ++fmt;
+        } else if (*fmt == 'L') {
+            ++fmt;
+        }
 
         spec = *fmt ? *fmt++ : 0;
         switch (spec) {
         case 'd':
         case 'i': {
-            int v = va_arg(ap, int);
-            unsigned int mag = v < 0 ? 0u - (unsigned int)v : (unsigned int)v;
-            rt_fmt_number(out, mag, 10, v < 0, 0, width, precision, left, zero,
-                          plus, space, 0, 0);
+            if (length == RT_SCAN_LEN_LL || length == RT_SCAN_LEN_INTMAX) {
+                long long v = va_arg(ap, long long);
+                unsigned long long mag =
+                    v < 0 ? 0ull - (unsigned long long)v
+                          : (unsigned long long)v;
+                rt_fmt_number(out, mag, 10, v < 0, 0, width, precision, left,
+                              zero, plus, space, 0, 0);
+            } else if (length == RT_SCAN_LEN_L || length == RT_SCAN_LEN_PTRDIFF) {
+                long v = va_arg(ap, long);
+                unsigned long mag =
+                    v < 0 ? 0ul - (unsigned long)v : (unsigned long)v;
+                rt_fmt_number(out, mag, 10, v < 0, 0, width, precision, left,
+                              zero, plus, space, 0, 0);
+            } else {
+                int v = va_arg(ap, int);
+                unsigned int mag =
+                    v < 0 ? 0u - (unsigned int)v : (unsigned int)v;
+                rt_fmt_number(out, mag, 10, v < 0, 0, width, precision, left,
+                              zero, plus, space, 0, 0);
+            }
             break;
         }
-        case 'u':
-            rt_fmt_number(out, va_arg(ap, unsigned int), 10, 0, 0, width,
-                          precision, left, zero, 0, 0, 0, 0);
+        case 'u': {
+            if (length == RT_SCAN_LEN_LL || length == RT_SCAN_LEN_INTMAX) {
+                unsigned long long v = va_arg(ap, unsigned long long);
+                rt_fmt_number(out, v, 10, 0, 0, width, precision, left, zero,
+                              0, 0, 0, 0);
+            } else if (length == RT_SCAN_LEN_L || length == RT_SCAN_LEN_SIZE
+                       || length == RT_SCAN_LEN_PTRDIFF) {
+                unsigned long v = va_arg(ap, unsigned long);
+                rt_fmt_number(out, v, 10, 0, 0, width, precision, left, zero,
+                              0, 0, 0, 0);
+            } else {
+                unsigned int v = va_arg(ap, unsigned int);
+                rt_fmt_number(out, v, 10, 0, 0, width, precision, left, zero,
+                              0, 0, 0, 0);
+            }
             break;
-        case 'x':
-            rt_fmt_number(out, va_arg(ap, unsigned int), 16, 0, 0, width,
-                          precision, left, zero, 0, 0, alt, 0);
+        }
+        case 'x': {
+            if (length == RT_SCAN_LEN_LL || length == RT_SCAN_LEN_INTMAX) {
+                unsigned long long v = va_arg(ap, unsigned long long);
+                rt_fmt_number(out, v, 16, 0, 0, width, precision, left, zero,
+                              0, 0, alt, 0);
+            } else if (length == RT_SCAN_LEN_L || length == RT_SCAN_LEN_SIZE
+                       || length == RT_SCAN_LEN_PTRDIFF) {
+                unsigned long v = va_arg(ap, unsigned long);
+                rt_fmt_number(out, v, 16, 0, 0, width, precision, left, zero,
+                              0, 0, alt, 0);
+            } else {
+                unsigned int v = va_arg(ap, unsigned int);
+                rt_fmt_number(out, v, 16, 0, 0, width, precision, left, zero,
+                              0, 0, alt, 0);
+            }
             break;
-        case 'X':
-            rt_fmt_number(out, va_arg(ap, unsigned int), 16, 0, 1, width,
-                          precision, left, zero, 0, 0, alt, 0);
+        }
+        case 'X': {
+            if (length == RT_SCAN_LEN_LL || length == RT_SCAN_LEN_INTMAX) {
+                unsigned long long v = va_arg(ap, unsigned long long);
+                rt_fmt_number(out, v, 16, 0, 1, width, precision, left, zero,
+                              0, 0, alt, 0);
+            } else if (length == RT_SCAN_LEN_L || length == RT_SCAN_LEN_SIZE
+                       || length == RT_SCAN_LEN_PTRDIFF) {
+                unsigned long v = va_arg(ap, unsigned long);
+                rt_fmt_number(out, v, 16, 0, 1, width, precision, left, zero,
+                              0, 0, alt, 0);
+            } else {
+                unsigned int v = va_arg(ap, unsigned int);
+                rt_fmt_number(out, v, 16, 0, 1, width, precision, left, zero,
+                              0, 0, alt, 0);
+            }
             break;
-        case 'o':
-            rt_fmt_number(out, va_arg(ap, unsigned int), 8, 0, 0, width,
-                          precision, left, zero, 0, 0, alt, 0);
+        }
+        case 'o': {
+            if (length == RT_SCAN_LEN_LL || length == RT_SCAN_LEN_INTMAX) {
+                unsigned long long v = va_arg(ap, unsigned long long);
+                rt_fmt_number(out, v, 8, 0, 0, width, precision, left, zero,
+                              0, 0, alt, 0);
+            } else if (length == RT_SCAN_LEN_L || length == RT_SCAN_LEN_SIZE
+                       || length == RT_SCAN_LEN_PTRDIFF) {
+                unsigned long v = va_arg(ap, unsigned long);
+                rt_fmt_number(out, v, 8, 0, 0, width, precision, left, zero,
+                              0, 0, alt, 0);
+            } else {
+                unsigned int v = va_arg(ap, unsigned int);
+                rt_fmt_number(out, v, 8, 0, 0, width, precision, left, zero,
+                              0, 0, alt, 0);
+            }
             break;
-        case 'p':
-            rt_fmt_number(out, (unsigned int)va_arg(ap, void *), 16, 0, 0,
-                          width, precision < 0 ? 1 : precision, left, zero,
-                          0, 0, 0, 1);
+        }
+        case 'p': {
+            unsigned int v = va_arg(ap, unsigned int);
+            int pointer_precision = precision < 0 ? 1 : precision;
+            rt_fmt_number(out, v, 16, 0, 0,
+                          width, pointer_precision, left, zero,
+                          0, 0, v != 0, v == 0);
             break;
+        }
         case 'c': {
             int ch = va_arg(ap, int);
             if (!left)
@@ -2177,19 +2414,36 @@ long labs(long value)
     return value < 0 ? -value : value;
 }
 
-unsigned long strtoul(const char *s, char **endptr, int base)
+long long llabs(long long value)
 {
-    unsigned long value = 0;
+    return value < 0 ? -value : value;
+}
+
+static unsigned long long rt_strtoull_parse(const char *s, char **endptr,
+                                            int base)
+{
+    const char *start = s;
+    const char *digits;
+    unsigned long long value = 0;
     int digit;
-    int any = 0;
+    int neg = 0;
 
     while (isspace((unsigned char)*s))
         ++s;
-    if (*s == '+')
+    if (*s == '-' || *s == '+') {
+        neg = *s == '-';
         ++s;
+    }
+    digits = s;
+    if (base != 0 && (base < 2 || base > 36)) {
+        if (endptr)
+            *endptr = (char *)start;
+        return 0;
+    }
     if ((base == 0 || base == 16) && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
         base = 16;
         s += 2;
+        digits = s;
     } else if (base == 0 && *s == '0') {
         base = 8;
     } else if (base == 0) {
@@ -2198,31 +2452,45 @@ unsigned long strtoul(const char *s, char **endptr, int base)
     while ((digit = rt_digit_value((unsigned char)*s)) >= 0 && digit < base) {
         value = value * (unsigned)base + (unsigned)digit;
         ++s;
-        any = 1;
     }
     if (endptr)
-        *endptr = (char *)(any ? s : s);
-    return value;
+        *endptr = (char *)(s != digits ? s : start);
+    return neg ? 0ull - value : value;
+}
+
+unsigned long long strtoull(const char *s, char **endptr, int base)
+{
+    return rt_strtoull_parse(s, endptr, base);
+}
+
+long long strtoll(const char *s, char **endptr, int base)
+{
+    return (long long)rt_strtoull_parse(s, endptr, base);
+}
+
+unsigned long strtoul(const char *s, char **endptr, int base)
+{
+    return (unsigned long)strtoull(s, endptr, base);
 }
 
 long strtol(const char *s, char **endptr, int base)
 {
-    int neg = 0;
-    unsigned long value;
-
-    while (isspace((unsigned char)*s))
-        ++s;
-    if (*s == '-' || *s == '+') {
-        neg = *s == '-';
-        ++s;
-    }
-    value = strtoul(s, endptr, base);
-    return neg ? -(long)value : (long)value;
+    return (long)strtoll(s, endptr, base);
 }
 
 int atoi(const char *s)
 {
     return (int)strtol(s, 0, 10);
+}
+
+long atol(const char *s)
+{
+    return strtol(s, 0, 10);
+}
+
+long long atoll(const char *s)
+{
+    return strtoll(s, 0, 10);
 }
 
 double strtod(const char *s, char **endptr)

@@ -361,6 +361,9 @@ wasm-printf-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/printf_fami
 wasm-scanf-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/scanf_family.js docs/runtime.js
 	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/scanf_family.js
 
+wasm-stdlib-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/stdlib_family.js docs/runtime.js
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/stdlib_family.js
+
 wasm-ide-test: wasm-ide tests/wasm32/ide_smoke.js
 	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/ide_smoke.js $(WASM_IDE_TCC_WASM) $(WASM_IDE_LIBC_WASM)
 
@@ -581,7 +584,7 @@ distclean: clean
 	@rm -vf config.h config.mak config.texi
 	@rm -vf $(TCCDOCS)
 
-.PHONY: all clean test wasm-test wasm32-test wasm-algorithm-test wasm-compiler wasm-compiler-test wasm-libc wasm-libc-test wasm-runtime-test wasm-lua-test wasm-printf-test wasm-scanf-test wasm-ide wasm-ide-test tar tags ETAGS doc distclean install uninstall FORCE
+.PHONY: all clean test wasm-test wasm32-test wasm-algorithm-test wasm-compiler wasm-compiler-test wasm-libc wasm-libc-test wasm-runtime-test wasm-lua-test wasm-printf-test wasm-scanf-test wasm-stdlib-test wasm-ide wasm-ide-test tar tags ETAGS doc distclean install uninstall FORCE
 
 help:
 	@echo "make"
@@ -623,6 +626,8 @@ help:
 	@echo "   compile and run printf/sprintf/snprintf/vprintf/vsnprintf fixtures"
 	@echo "make wasm-scanf-test"
 	@echo "   compile and run scanf/sscanf/vsscanf fixtures"
+	@echo "make wasm-stdlib-test"
+	@echo "   compile and run stdlib sorting/search/conversion fixtures"
 	@echo "make wasm-ide-test"
 	@echo "   run the hosted compiler/app/libc pipeline used by docs/ide-shell.html"
 	@echo "make test-install"

@@ -19,9 +19,13 @@ const EXPECTED_EXPORTS = [
   'memmove',
   'memcmp',
   'strlen',
+  'strnlen',
   'strcpy',
+  'strdup',
   'strcmp',
   'strncmp',
+  'strtok',
+  'strtok_r',
   'malloc',
   'free',
   'calloc',
@@ -58,7 +62,12 @@ const EXPECTED_EXPORTS = [
   'vsscanf',
   'sscanf',
   'vscanf',
-  'scanf'
+  'scanf',
+  'llabs',
+  'atol',
+  'atoll',
+  'strtoll',
+  'strtoull'
 ];
 
 function assertEq(name, got, exp) {

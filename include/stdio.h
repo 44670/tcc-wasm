@@ -35,6 +35,10 @@ int sprintf(char *dst, const char *fmt, ...);
 int snprintf(char *dst, size_t n, const char *fmt, ...);
 int vsprintf(char *dst, const char *fmt, va_list ap);
 int vsnprintf(char *dst, size_t n, const char *fmt, va_list ap);
+int scanf(const char *fmt, ...);
+int vscanf(const char *fmt, va_list ap);
+int sscanf(const char *src, const char *fmt, ...);
+int vsscanf(const char *src, const char *fmt, va_list ap);
 
 int fputs(const char *s, FILE *f);
 char *fgets(char *s, int n, FILE *f);

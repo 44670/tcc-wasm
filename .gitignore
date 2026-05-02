@@ -73,8 +73,4 @@ tests/hello
 tests/tests2/fred.txt
 libtcc.dylib
 node_modules/
-docs/tcc-wasm-bare.html
-docs/tcc-wasm-demo.html
-docs/ide-resources.js
-docs/libc.wasm
-docs/tcc.wasm
+ref/
