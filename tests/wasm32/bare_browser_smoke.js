@@ -1,6 +1,6 @@
 const fs = require('fs');
 
-const wasmPath = process.argv[2] || 'web/tcc.wasm';
+const wasmPath = process.argv[2] || 'docs/tcc.wasm';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 

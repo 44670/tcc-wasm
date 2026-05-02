@@ -26,8 +26,8 @@ Currently working:
 - `make wasm-compiler-test`, which instantiates the hosted compiler wasm
   directly in Node and compiles fib, Duff's device, and a negative diagnostic
   case through the exported C ABI
-- `make wasm-ide`, which prepares `web/ide-shell.html` plus sibling
-  `web/tcc.wasm` and `web/libc.wasm` artifacts for the browser IDE. The page
+- `make wasm-ide`, which prepares `docs/ide-shell.html` plus sibling
+  `docs/tcc.wasm` and `docs/libc.wasm` artifacts for the browser IDE. The page
   emits WAT/app wasm, accepts stdin, runs the app, and shows libc-captured
   stdout
 - `make wasm-libc`, which builds `libc.wasm` from `lib/wasm32-libc.c` using
@@ -317,7 +317,7 @@ path.
 
 Hosted compiler wasm:
 
-- `web/tcc_browser_bare.c` embeds TCC through `tcc.c`, but exports a direct C
+- `docs/tcc_browser_bare.c` embeds TCC through `tcc.c`, but exports a direct C
   ABI: `tcc_bare_compile`, `tcc_bare_compile_app`,
   `tcc_bare_compile_with_options`, `tcc_bare_output`,
   `tcc_bare_output_len`, `tcc_bare_error`, and `tcc_bare_error_len`.
@@ -333,9 +333,9 @@ Hosted compiler wasm:
 
 IDE host:
 
-- `web/ide-shell.html` is the editable source. `make wasm-ide` prepares
-  sibling `web/tcc.wasm` and `web/libc.wasm` artifacts; the IDE loads those and
-  `web/runtime.js` directly instead of embedding wasm into generated HTML.
+- `docs/ide-shell.html` is the editable source. `make wasm-ide` prepares
+  sibling `docs/tcc.wasm` and `docs/libc.wasm` artifacts; the IDE loads those and
+  `docs/runtime.js` directly instead of embedding wasm into generated HTML.
 - The IDE compiles with `tcc_bare_compile_app`, displays WAT, assembles it to
   app wasm in the browser, then runs app wasm with one host-owned fixed memory
   shared with `libc.wasm`.
@@ -347,11 +347,11 @@ IDE host:
 
 Tasks:
 
-- Keep `web/ide-shell.html` as the editable source, with `web/tcc.wasm`,
-  `web/libc.wasm`, and `web/runtime.js` as sibling runtime assets.
+- Keep `docs/ide-shell.html` as the editable source, with `docs/tcc.wasm`,
+  `docs/libc.wasm`, and `docs/runtime.js` as sibling runtime assets.
 - Decide whether browser WAT-to-wasm assembly stays on CDN WABT for now or
-  becomes a local `web/wabt.wasm`/JS dependency.
-- Add a small smoke test that opens `web/ide-shell.html` in headless Chromium
+  becomes a local `docs/wabt.wasm`/JS dependency.
+- Add a small smoke test that opens `docs/ide-shell.html` in headless Chromium
   and checks that the default fib example reaches `statusText == "Compiled"`.
 - Add a second browser smoke test for Duff's device to catch repeated-compile
   state leaks.
@@ -416,7 +416,7 @@ Runtime/libc tasks:
 - Replace the small libc declarations in tests/demos with usable headers.
 - Keep the in-memory file layer intentionally small unless a real POSIX-like
   filesystem contract is designed.
-- Keep host-only math (`sin`, `pow`, `floor`, etc.) in `web/runtime.js` imports
+- Keep host-only math (`sin`, `pow`, `floor`, etc.) in `docs/runtime.js` imports
   unless a C implementation needs direct app memory access.
 
 ### 8. Varargs and VLA
@@ -517,7 +517,7 @@ Harness tasks:
   float, 64-bit/floating varargs, VLA, computed goto, unsupported imports.
 - Add a mode that compares checked-in `tests/wasm32/*.wat` against freshly
   generated output, so WAT shape changes are intentional.
-- Add a real browser smoke test for `web/ide-shell.html`.
+- Add a real browser smoke test for `docs/ide-shell.html`.
 - Extend `wasm-compiler-test` to run in a real browser after the direct Node
   instantiation path is stable.
 - Add broader user-module import tests now that the backend can emit imported
@@ -542,7 +542,7 @@ Harness tasks:
 6. Broaden structured CFG lowering beyond straight-line and simple if/else.
 7. Add broader imports for runtime services and document the supported libc
    surface.
-8. Add a browser smoke test for `web/ide-shell.html`.
+8. Add a browser smoke test for `docs/ide-shell.html`.
 9. Extend varargs beyond 32-bit integer/pointer slots.
 10. Implement VLA.
 11. Implement computed goto.

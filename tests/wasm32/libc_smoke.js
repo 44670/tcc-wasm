@@ -1,5 +1,5 @@
 const fs = require('fs');
-const Runtime = require('../../web/runtime.js');
+const Runtime = require('../../docs/runtime.js');
 
 const wasmPath = process.argv[2] || 'libc.wasm';
 const encoder = new TextEncoder();

@@ -1,13 +1,13 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const Runtime = require('../../web/runtime.js');
-const IdeResources = require('../../web/ide-resources.js');
+const Runtime = require('../../docs/runtime.js');
+const IdeResources = require('../../docs/ide-resources.js');
 const { assembleWat } = require('./assemble_wat.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const compilerPath = process.argv[2] || path.join(ROOT, 'web/tcc.wasm');
-const libcPath = process.argv[3] || path.join(ROOT, 'web/libc.wasm');
+const compilerPath = process.argv[2] || path.join(ROOT, 'docs/tcc.wasm');
+const libcPath = process.argv[3] || path.join(ROOT, 'docs/libc.wasm');
 
 const SOURCE = `
 int scanf(const char *fmt, ...);

@@ -293,14 +293,14 @@ space.
 
 ## Browser IDE
 
-`web/ide-shell.html` is the browser product surface for the linked-runtime
+`docs/ide-shell.html` is the browser product surface for the linked-runtime
 design. It is a checked-in plain HTML shell that loads sibling artifacts with
 relative fetches:
 
-- `web/runtime.js`, the shared browser/Node runtime wrapper
-- `web/tcc.wasm`, copied from the hosted TCC compiler wasm built by Emscripten
+- `docs/runtime.js`, the shared browser/Node runtime wrapper
+- `docs/tcc.wasm`, copied from the hosted TCC compiler wasm built by Emscripten
   as standalone wasm without the generated Emscripten JS runtime
-- `web/libc.wasm`, copied from the runtime provider built by `wasm32-tcc`
+- `docs/libc.wasm`, copied from the runtime provider built by `wasm32-tcc`
 
 The page compiles user C through `tcc_bare_compile_app`, displays the emitted
 WAT, assembles WAT to app wasm in the browser, instantiates app and libc with

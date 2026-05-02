@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const Runtime = require('../../web/runtime.js');
+const Runtime = require('../../docs/runtime.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const TEST_DIR = path.join(__dirname, 'src/lua-5.1.5/test');

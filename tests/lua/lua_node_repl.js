@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const Runtime = require('../../web/runtime.js');
+const Runtime = require('../../docs/runtime.js');
 
 function assertEq(name, got, expected) {
   if (got !== expected)

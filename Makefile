@@ -295,10 +295,10 @@ WASM_HOST_DEFINES += -DCONFIG_TCCDIR="\"/\""
 WASM_HOST_DEFINES += -DCONFIG_TCC_SYSINCLUDEPATHS="\"/include\""
 WASM_HOST_DEFINES += -DCONFIG_TCC_LIBPATHS="\"/\""
 WASM_HOST_DEFINES += -DTCC_GITHASH="\"browser\""
-WASM_IDE_SHELL = web/ide-shell.html
-WASM_IDE_TCC_WASM = web/tcc.wasm
-WASM_IDE_LIBC_WASM = web/libc.wasm
-WASM_IDE_RESOURCES_JS = web/ide-resources.js
+WASM_IDE_SHELL = docs/ide-shell.html
+WASM_IDE_TCC_WASM = docs/tcc.wasm
+WASM_IDE_LIBC_WASM = docs/libc.wasm
+WASM_IDE_RESOURCES_JS = docs/ide-resources.js
 WASM_IDE_RESOURCE_INPUTS = $(wildcard include/*.h) tcclib.h
 WASM_LIBC_SRC = lib/wasm32-libc.c
 WASM_LIBC_WAT = libc.wat
@@ -316,13 +316,13 @@ WASM_COMPILER_EMFLAGS += -sINITIAL_MEMORY=268435456 -sALLOW_MEMORY_GROWTH=0
 WASM_COMPILER_EMFLAGS += -sEXPORTED_FUNCTIONS='["_malloc","_free","_tcc_bare_add_resource","_tcc_bare_compile","_tcc_bare_compile_app","_tcc_bare_compile_with_options","_tcc_bare_output","_tcc_bare_output_len","_tcc_bare_error","_tcc_bare_error_len"]'
 
 wasm-compiler: $(WASM_IDE_TCC_WASM)
-wasm-ide: $(WASM_IDE_SHELL) web/runtime.js web/editor.js $(WASM_IDE_RESOURCES_JS) $(WASM_IDE_TCC_WASM) $(WASM_IDE_LIBC_WASM)
+wasm-ide: $(WASM_IDE_SHELL) docs/runtime.js docs/editor.js $(WASM_IDE_RESOURCES_JS) $(WASM_IDE_TCC_WASM) $(WASM_IDE_LIBC_WASM)
 
-$(WASM_IDE_RESOURCES_JS): web/build-ide-resources.js $(WASM_IDE_RESOURCE_INPUTS)
-	$Snode web/build-ide-resources.js $@
+$(WASM_IDE_RESOURCES_JS): docs/build-ide-resources.js $(WASM_IDE_RESOURCE_INPUTS)
+	$Snode docs/build-ide-resources.js $@
 
-$(WASM_IDE_TCC_WASM): web/tcc_browser_bare.c $(wasm32_FILES) $(TCCDEFS_H)
-	$S$(EMCC) web/tcc_browser_bare.c -o $@ $(WASM_COMPILER_EMFLAGS)
+$(WASM_IDE_TCC_WASM): docs/tcc_browser_bare.c $(wasm32_FILES) $(TCCDEFS_H)
+	$S$(EMCC) docs/tcc_browser_bare.c -o $@ $(WASM_COMPILER_EMFLAGS)
 
 $(WASM_IDE_LIBC_WASM): $(WASM_LIBC_WASM)
 	$Scp $< $@
@@ -341,7 +341,7 @@ $(WASM_LIBC_WASM): $(WASM_LIBC_WAT)
 wasm-libc-test: $(WASM_LIBC_WASM) tests/wasm32/libc_smoke.js
 	@node tests/wasm32/libc_smoke.js $(WASM_LIBC_WASM)
 
-wasm-runtime-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/shared_runtime_smoke.js tests/wasm32/runtime_host_errors.js web/runtime.js
+wasm-runtime-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/shared_runtime_smoke.js tests/wasm32/runtime_host_errors.js docs/runtime.js
 	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/shared_runtime_smoke.js
 	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/runtime_host_errors.js $(WASM_LIBC_WASM)
 
@@ -351,14 +351,14 @@ $(WASM_LUA_WAT): $(WASM_LUA_DIR)/lua_wasm_all.c wasm32-tcc$(EXESUF)
 $(WASM_LUA_WASM): $(WASM_LUA_WAT)
 	$S$(WASM_ASSEMBLE) --exceptions $< $@
 
-wasm-lua-test: $(WASM_LIBC_WASM) $(WASM_LUA_WASM) tests/lua/lua_node_repl.js tests/lua/lua_internal_tests.js web/runtime.js
+wasm-lua-test: $(WASM_LIBC_WASM) $(WASM_LUA_WASM) tests/lua/lua_node_repl.js tests/lua/lua_internal_tests.js docs/runtime.js
 	@node tests/lua/lua_node_repl.js $(WASM_LUA_WASM) $(WASM_LIBC_WASM)
 	@node tests/lua/lua_internal_tests.js $(WASM_LUA_WASM) $(WASM_LIBC_WASM)
 
 wasm-printf-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/printf_family.js
 	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/printf_family.js
 
-wasm-scanf-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/scanf_family.js web/runtime.js
+wasm-scanf-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) tests/wasm32/scanf_family.js docs/runtime.js
 	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/scanf_family.js
 
 wasm-ide-test: wasm-ide tests/wasm32/ide_smoke.js
@@ -571,7 +571,7 @@ clean:
 	@rm -f tcc *-tcc tcc_p tcc_c tcc_s
 	@rm -f tags ETAGS *.o *.a *.so* *.out *.log lib*.def *.exe *.dll
 	@rm -f a.out *.dylib *_.h *.pod *.tcov
-	@rm -f web/ide.html web/tcc.wasm web/libc.wasm web/ide-resources.js
+	@rm -f docs/ide.html docs/tcc.wasm docs/libc.wasm docs/ide-resources.js
 	@rm -f libc.wat libc.wasm
 	@rm -f tests/lua/lua.wat tests/lua/lua.wasm
 	@$(MAKE) -s -C lib $@
@@ -609,11 +609,11 @@ help:
 	@echo "make sani-test / sani-tests2.37 / sani-testspp.17"
 	@echo "   run tests as above with sanitize option."
 	@echo "make wasm-compiler"
-	@echo "   build the hosted TCC wasm compiler used by web/ide-shell.html"
+	@echo "   build the hosted TCC wasm compiler used by docs/ide-shell.html"
 	@echo "make wasm-compiler-test"
 	@echo "   instantiate the hosted compiler wasm directly and compile smoke inputs"
 	@echo "make wasm-ide"
-	@echo "   prepare web/ide-shell.html plus sibling tcc.wasm/libc.wasm artifacts"
+	@echo "   prepare docs/ide-shell.html plus sibling tcc.wasm/libc.wasm artifacts"
 	@echo "make wasm-libc / make wasm-libc-test"
 	@echo "   build and test libc.wasm using the wasm32 TCC backend"
 	@echo "   wasm tests assemble WAT with WABT by default; run npm install first"
@@ -624,7 +624,7 @@ help:
 	@echo "make wasm-scanf-test"
 	@echo "   compile and run scanf/sscanf/vsscanf fixtures"
 	@echo "make wasm-ide-test"
-	@echo "   run the hosted compiler/app/libc pipeline used by web/ide-shell.html"
+	@echo "   run the hosted compiler/app/libc pipeline used by docs/ide-shell.html"
 	@echo "make test-install"
 	@echo "   run tests with the installed tcc"
 	@echo "Other supported make targets:"
