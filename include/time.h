@@ -3,8 +3,15 @@
 
 #include <stddef.h>
 
+#ifndef __TCC_TIME_T_TYPEDEF
+#define __TCC_TIME_T_TYPEDEF
 typedef int time_t;
+#endif
+
+#ifndef __TCC_CLOCK_T_TYPEDEF
+#define __TCC_CLOCK_T_TYPEDEF
 typedef int clock_t;
+#endif
 
 #define CLOCKS_PER_SEC 1000
 

@@ -51,6 +51,9 @@ struct __wasm_FILE {
     size_t cap;
     int writable;
     char *path;
+    int memstream;
+    char **memstream_ptr;
+    size_t *memstream_len;
 };
 
 typedef struct __wasm_FILE FILE;
@@ -2008,6 +2011,16 @@ int fputs(const char *s, FILE *f)
     if (!s || !f)
         return EOF;
     len = strlen(s);
+    if (f->fd == RT_FILE_MEM) {
+        r = rt_file_append(f, s, len);
+        if (r < 0 || (size_t)r != len) {
+            f->err = 1;
+            if (r < 0)
+                rt_errno = -r;
+            return EOF;
+        }
+        return 0;
+    }
     r = rt_write(f->fd, s, len);
     if (r < 0 || (size_t)r != len) {
         f->err = 1;
@@ -2063,9 +2076,32 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
     return ((size_t)r) / size;
 }
 
+static int rt_memstream_sync(FILE *f)
+{
+    unsigned char *p;
+
+    if (!f || !f->memstream)
+        return 0;
+    p = realloc(f->buf, f->len + 1);
+    if (!p && f->len + 1) {
+        f->err = 1;
+        rt_errno = -RT_ENOSPC;
+        return -1;
+    }
+    f->buf = p;
+    f->cap = f->len + 1;
+    f->buf[f->len] = 0;
+    if (f->memstream_ptr)
+        *f->memstream_ptr = (char *)f->buf;
+    if (f->memstream_len)
+        *f->memstream_len = f->len;
+    return 0;
+}
+
 int fflush(FILE *f)
 {
-    (void)f;
+    if (f && rt_memstream_sync(f) < 0)
+        return EOF;
     return 0;
 }
 
@@ -2077,14 +2113,17 @@ int fclose(FILE *f)
         return EOF;
     if (f == &rt_file_stdin || f == &rt_file_stdout || f == &rt_file_stderr)
         return 0;
-    if (f->fd == RT_FILE_MEM && f->writable && f->path) {
+    if (f->memstream) {
+        if (rt_memstream_sync(f) < 0)
+            r = -1;
+    } else if (f->fd == RT_FILE_MEM && f->writable && f->path) {
         r = rt_file_store(f->path, f->buf, f->len);
         if (r < 0) {
             f->err = 1;
             rt_errno = -r;
         }
     }
-    if (f->writable)
+    if (f->writable && !f->memstream)
         free(f->buf);
     free(f->path);
     free(f);
@@ -2132,10 +2171,47 @@ FILE *fopen(const char *path, const char *mode)
     return f;
 }
 
+FILE *fdopen(int fd, const char *mode)
+{
+    (void)mode;
+    if (fd == RT_STDIN)
+        return &rt_file_stdin;
+    if (fd == RT_STDOUT)
+        return &rt_file_stdout;
+    if (fd == RT_STDERR)
+        return &rt_file_stderr;
+    rt_errno = -RT_EBADF;
+    return 0;
+}
+
 FILE *freopen(const char *path, const char *mode, FILE *f)
 {
     (void)path;
     (void)mode;
+    return f;
+}
+
+FILE *open_memstream(char **ptr, size_t *sizeloc)
+{
+    FILE *f;
+
+    if (!ptr || !sizeloc) {
+        rt_errno = -RT_EINVAL;
+        return 0;
+    }
+    f = malloc(sizeof *f);
+    if (!f) {
+        rt_errno = -RT_ENOSPC;
+        return 0;
+    }
+    memset(f, 0, sizeof *f);
+    f->fd = RT_FILE_MEM;
+    f->writable = 1;
+    f->memstream = 1;
+    f->memstream_ptr = ptr;
+    f->memstream_len = sizeloc;
+    *ptr = 0;
+    *sizeloc = 0;
     return f;
 }
 
@@ -2157,6 +2233,36 @@ int remove(const char *path)
 {
     (void)path;
     rt_errno = -RT_ENOSYS;
+    return -1;
+}
+
+int unlink(const char *path)
+{
+    return remove(path);
+}
+
+int open(const char *path, int flags, ...)
+{
+    (void)path;
+    (void)flags;
+    rt_errno = -RT_ENOSYS;
+    return -1;
+}
+
+int close(int fd)
+{
+    if (fd >= RT_STDIN && fd <= RT_STDERR)
+        return 0;
+    rt_errno = -RT_EBADF;
+    return -1;
+}
+
+int lseek(int fd, int offset, int whence)
+{
+    (void)fd;
+    (void)offset;
+    (void)whence;
+    rt_errno = -RT_EINVAL;
     return -1;
 }
 
@@ -2419,6 +2525,129 @@ long long llabs(long long value)
     return value < 0 ? -value : value;
 }
 
+typedef union {
+    unsigned long long ull;
+    struct {
+        unsigned int lo;
+        unsigned int hi;
+    } s;
+} RtU64;
+
+static int rt_u64_ge(const RtU64 *a, const RtU64 *b)
+{
+    if (a->s.hi != b->s.hi)
+        return a->s.hi > b->s.hi;
+    return a->s.lo >= b->s.lo;
+}
+
+static void rt_u64_sub(RtU64 *a, const RtU64 *b)
+{
+    unsigned int old_lo = a->s.lo;
+    a->s.lo -= b->s.lo;
+    a->s.hi -= b->s.hi + (old_lo < b->s.lo);
+}
+
+static void rt_u64_shl1(RtU64 *a)
+{
+    a->s.hi = (a->s.hi << 1) | (a->s.lo >> 31);
+    a->s.lo <<= 1;
+}
+
+static unsigned int rt_u64_get_bit(const RtU64 *a, int bit)
+{
+    if (bit < 32)
+        return (a->s.lo >> bit) & 1u;
+    return (a->s.hi >> (bit - 32)) & 1u;
+}
+
+static void rt_u64_set_bit(RtU64 *a, int bit)
+{
+    if (bit < 32)
+        a->s.lo |= 1u << bit;
+    else
+        a->s.hi |= 1u << (bit - 32);
+}
+
+static unsigned long long rt_udivmoddi(unsigned long long n,
+                                       unsigned long long d,
+                                       unsigned long long *rem)
+{
+    RtU64 dividend;
+    RtU64 divisor;
+    RtU64 q;
+    RtU64 r;
+    int bit;
+
+    dividend.ull = n;
+    divisor.ull = d;
+    q.ull = 0;
+    r.ull = 0;
+    if (d == 0) {
+        if (rem)
+            *rem = 0;
+        return 0;
+    }
+    for (bit = 63; bit >= 0; --bit) {
+        rt_u64_shl1(&r);
+        r.s.lo |= rt_u64_get_bit(&dividend, bit);
+        if (rt_u64_ge(&r, &divisor)) {
+            rt_u64_sub(&r, &divisor);
+            rt_u64_set_bit(&q, bit);
+        }
+    }
+    if (rem)
+        *rem = r.ull;
+    return q.ull;
+}
+
+unsigned long long __udivdi3(unsigned long long u, unsigned long long v)
+{
+    return rt_udivmoddi(u, v, 0);
+}
+
+unsigned long long __umoddi3(unsigned long long u, unsigned long long v)
+{
+    unsigned long long r;
+    rt_udivmoddi(u, v, &r);
+    return r;
+}
+
+unsigned long long __lshrdi3(unsigned long long a, int b)
+{
+    RtU64 u;
+
+    u.ull = a;
+    if (b >= 64) {
+        u.s.lo = 0;
+        u.s.hi = 0;
+    } else if (b >= 32) {
+        u.s.lo = u.s.hi >> (b - 32);
+        u.s.hi = 0;
+    } else if (b > 0) {
+        u.s.lo = (u.s.lo >> b) | (u.s.hi << (32 - b));
+        u.s.hi >>= b;
+    }
+    return u.ull;
+}
+
+long long __ashldi3(long long a, int b)
+{
+    RtU64 u;
+
+    u.ull = (unsigned long long)a;
+    if (b >= 64) {
+        u.s.lo = 0;
+        u.s.hi = 0;
+    } else if (b >= 32) {
+        u.s.hi = u.s.lo << (b - 32);
+        u.s.lo = 0;
+    } else if (b > 0) {
+        u.s.hi = (u.s.hi << b) | (u.s.lo >> (32 - b));
+        u.s.lo <<= b;
+    }
+    return (long long)u.ull;
+}
+
 static unsigned long long rt_strtoull_parse(const char *s, char **endptr,
                                             int base)
 {
@@ -2476,6 +2705,16 @@ unsigned long strtoul(const char *s, char **endptr, int base)
 long strtol(const char *s, char **endptr, int base)
 {
     return (long)strtoll(s, endptr, base);
+}
+
+long long strtoimax(const char *s, char **endptr, int base)
+{
+    return strtoll(s, endptr, base);
+}
+
+unsigned long long strtoumax(const char *s, char **endptr, int base)
+{
+    return strtoull(s, endptr, base);
 }
 
 int atoi(const char *s)
@@ -2567,10 +2806,67 @@ double strtod(const char *s, char **endptr)
     return sign < 0 ? -value : value;
 }
 
+float strtof(const char *s, char **endptr)
+{
+    return (float)strtod(s, endptr);
+}
+
+long double strtold(const char *s, char **endptr)
+{
+    return (long double)strtod(s, endptr);
+}
+
+long double ldexpl(long double x, int exp)
+{
+    while (exp > 0) {
+        x *= 2.0;
+        --exp;
+    }
+    while (exp < 0) {
+        x /= 2.0;
+        ++exp;
+    }
+    return x;
+}
+
 char *getenv(const char *name)
 {
     (void)name;
     return 0;
+}
+
+char *getcwd(char *buf, size_t size)
+{
+    if (!buf || size == 0) {
+        rt_errno = -RT_EINVAL;
+        return 0;
+    }
+    if (size < 2) {
+        rt_errno = -RT_ENOSPC;
+        return 0;
+    }
+    buf[0] = '/';
+    buf[1] = 0;
+    return buf;
+}
+
+char *realpath(const char *path, char *resolved_path)
+{
+    size_t len;
+    char *out;
+
+    if (!path) {
+        rt_errno = -RT_EINVAL;
+        return 0;
+    }
+    len = strlen(path);
+    out = resolved_path ? resolved_path : malloc(len + 1);
+    if (!out) {
+        rt_errno = -RT_ENOSPC;
+        return 0;
+    }
+    memcpy(out, path, len + 1);
+    return out;
 }
 
 int system(const char *command)
@@ -2620,6 +2916,16 @@ struct tm {
     int tm_isdst;
 };
 
+struct timeval {
+    time_t tv_sec;
+    int tv_usec;
+};
+
+struct timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
+};
+
 clock_t clock(void)
 {
     return 0;
@@ -2631,6 +2937,19 @@ time_t time(time_t *t)
     if (t)
         *t = now;
     return now;
+}
+
+int gettimeofday(struct timeval *tv, struct timezone *tz)
+{
+    if (tv) {
+        tv->tv_sec = time(0);
+        tv->tv_usec = 0;
+    }
+    if (tz) {
+        tz->tz_minuteswest = 0;
+        tz->tz_dsttime = 0;
+    }
+    return 0;
 }
 
 int difftime(time_t end, time_t beginning)
@@ -2716,4 +3035,9 @@ int rt_isatty(int fd)
     if (rt_stdio_hosted)
         return rt_host_isatty(fd);
     return fd == RT_STDIN;
+}
+
+int isatty(int fd)
+{
+    return rt_isatty(fd);
 }

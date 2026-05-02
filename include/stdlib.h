@@ -31,6 +31,9 @@ unsigned long strtoul(const char *s, char **endptr, int base);
 long long strtoll(const char *s, char **endptr, int base);
 unsigned long long strtoull(const char *s, char **endptr, int base);
 double strtod(const char *s, char **endptr);
+float strtof(const char *s, char **endptr);
+long double strtold(const char *s, char **endptr);
+char *realpath(const char *path, char *resolved_path);
 int rand(void);
 void srand(unsigned seed);
 

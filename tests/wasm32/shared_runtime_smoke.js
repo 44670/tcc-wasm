@@ -95,6 +95,35 @@ int call_imported_sum(void)
 }
 `;
 
+const SIZEOF_NO_CODE_SOURCE = `
+int ext(int value);
+
+struct S {
+    int **p;
+    int n;
+};
+
+static int cmp(void *a, void *b)
+{
+    return a != b;
+}
+
+static void sink(void *base, int n, int width,
+                 int (*compar)(void *, void *))
+{
+}
+
+void call_sink(struct S *s)
+{
+    sink(s->p, s->n, sizeof *s->p, cmp);
+}
+
+int call_sizeof_ext(void)
+{
+    return sizeof ext(1);
+}
+`;
+
 const SJLJ_SOURCE = `
 #include <setjmp.h>
 #include <stdio.h>
@@ -180,6 +209,29 @@ function assertImportedVarargs(tmpDir) {
              text.includes('(call $imported_sum (i32.const 3) (global.get $__stack_pointer))'));
 }
 
+function assertSizeofNoCodeDoesNotMutateRegs(tmpDir) {
+  const src = path.join(tmpDir, 'sizeof_no_code.c');
+  const wat = path.join(tmpDir, 'sizeof_no_code.wat');
+
+  fs.writeFileSync(src, SIZEOF_NO_CODE_SOURCE);
+  run(path.join(ROOT, 'wasm32-tcc'), [
+    '-nostdinc',
+    '-nostdlib',
+    '-Wl,--wasm-app',
+    '-o',
+    wat,
+    src
+  ]);
+
+  const text = fs.readFileSync(wat, 'utf8');
+  assertTrue('sizeof operand should not add extra loads to earlier args',
+             text.includes('(call $sink (i32.load (local.get $r0))'));
+  assertTrue('sizeof operand should not turn field load into triple dereference',
+             !text.includes('(call $sink (i32.load (i32.load (i32.load'));
+  assertTrue('sizeof call operand should not register unused imports',
+             !text.includes('(import "libc" "ext"'));
+}
+
 async function assertSetjmpLongjmp(tmpDir) {
   const src = path.join(tmpDir, 'sjlj.c');
   const wat = path.join(tmpDir, 'sjlj.wat');
@@ -217,6 +269,7 @@ async function assertSetjmpLongjmp(tmpDir) {
   const appWasm = path.join(tmpDir, 'app.wasm');
 
   assertImportedVarargs(tmpDir);
+  assertSizeofNoCodeDoesNotMutateRegs(tmpDir);
   await assertSetjmpLongjmp(tmpDir);
 
   fs.writeFileSync(appC, APP_SOURCE);

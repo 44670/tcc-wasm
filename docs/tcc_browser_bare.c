@@ -100,7 +100,8 @@ static void bare_append(char **buf, size_t *len, const char *msg)
 {
     size_t msg_len = strlen(msg);
     size_t extra = msg_len + (*len ? 1 : 0);
-    char *p = tcc_realloc(*buf, *len + extra + 1);
+    char *old_buf = *buf;
+    char *p = tcc_realloc(old_buf, *len + extra + 1);
     if (!p)
         return;
     *buf = p;

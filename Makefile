@@ -299,7 +299,7 @@ WASM_IDE_SHELL = docs/ide-shell.html
 WASM_IDE_TCC_WASM = docs/tcc.wasm
 WASM_IDE_LIBC_WASM = docs/libc.wasm
 WASM_IDE_RESOURCES_JS = docs/ide-resources.js
-WASM_IDE_RESOURCE_INPUTS = $(wildcard include/*.h) tcclib.h
+WASM_IDE_RESOURCE_INPUTS = $(wildcard include/*.h include/*/*.h) tcclib.h
 WASM_LIBC_SRC = lib/wasm32-libc.c
 WASM_LIBC_WAT = libc.wat
 WASM_LIBC_WASM = libc.wasm
@@ -329,6 +329,9 @@ $(WASM_IDE_LIBC_WASM): $(WASM_LIBC_WASM)
 
 wasm-compiler-test: $(WASM_IDE_TCC_WASM) tests/wasm32/bare_browser_smoke.js
 	@node tests/wasm32/bare_browser_smoke.js $(WASM_IDE_TCC_WASM)
+
+wasm-selfhost-compiler-test: $(WASM_LIBC_WASM) wasm32-tcc$(EXESUF) docs/tcc_browser_bare.c tests/wasm32/selfhost_compiler_smoke.js
+	@WASM_ASSEMBLER="$(WASM_ASSEMBLER)" node tests/wasm32/selfhost_compiler_smoke.js
 
 wasm-libc: $(WASM_LIBC_WASM)
 
@@ -584,7 +587,7 @@ distclean: clean
 	@rm -vf config.h config.mak config.texi
 	@rm -vf $(TCCDOCS)
 
-.PHONY: all clean test wasm-test wasm32-test wasm-algorithm-test wasm-compiler wasm-compiler-test wasm-libc wasm-libc-test wasm-runtime-test wasm-lua-test wasm-printf-test wasm-scanf-test wasm-stdlib-test wasm-ide wasm-ide-test tar tags ETAGS doc distclean install uninstall FORCE
+.PHONY: all clean test wasm-test wasm32-test wasm-algorithm-test wasm-compiler wasm-compiler-test wasm-selfhost-compiler-test wasm-libc wasm-libc-test wasm-runtime-test wasm-lua-test wasm-printf-test wasm-scanf-test wasm-stdlib-test wasm-ide wasm-ide-test tar tags ETAGS doc distclean install uninstall FORCE
 
 help:
 	@echo "make"
@@ -615,6 +618,8 @@ help:
 	@echo "   build the hosted TCC wasm compiler used by docs/ide-shell.html"
 	@echo "make wasm-compiler-test"
 	@echo "   instantiate the hosted compiler wasm directly and compile smoke inputs"
+	@echo "make wasm-selfhost-compiler-test"
+	@echo "   build TCC to wasm with wasm32-tcc, then smoke-test it in Node"
 	@echo "make wasm-ide"
 	@echo "   prepare docs/ide-shell.html plus sibling tcc.wasm/libc.wasm artifacts"
 	@echo "make wasm-libc / make wasm-libc-test"

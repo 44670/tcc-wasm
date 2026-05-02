@@ -244,6 +244,8 @@ static int wasm32_text_uses_local_reg(const char *text, int local_reg)
 
 static void wasm32_forget_reg_expr(int r)
 {
+    if (nocode_wanted)
+        return;
     if (r < 0 || r >= NB_REGS)
         return;
     tcc_free(wasm32_reg_exprs[r]);
@@ -277,7 +279,8 @@ ST_FUNC void wasm32_reuse_last_cmp(SValue *sv)
 static void wasm32_set_cmp_regs(SValue *sv, int a, int b)
 {
     sv->cmp_r = a | (b << 8);
-    wasm32_last_cmp_r = sv->cmp_r;
+    if (!nocode_wanted)
+        wasm32_last_cmp_r = sv->cmp_r;
 }
 
 static int wasm32_reg_expr_uses_local(int expr_reg, int local_reg)
@@ -315,6 +318,10 @@ static char *wasm32_get_reg_expr(int r)
 
 static void wasm32_set_reg_expr_owned_typed(int r, WasmValType type, char *expr)
 {
+    if (nocode_wanted) {
+        tcc_free(expr);
+        return;
+    }
     if (r < 0 || r >= NB_REGS) {
         tcc_free(expr);
         return;
@@ -333,6 +340,8 @@ static void wasm32_set_reg_expr_owned(int r, char *expr)
 
 static void wasm32_note_reg_local_type(int r, WasmValType type)
 {
+    if (nocode_wanted)
+        return;
     if (r >= 0 && r < NB_REGS)
         wasm32_reg_local_types[r] = type;
 }
@@ -415,8 +424,20 @@ static WasmFunc *wasm32_new_func(const char *name)
 
 static void wasm32_vec_add_op(WasmFunc *f, WasmOp *op)
 {
-    f->ops = tcc_realloc(f->ops, (f->nb_ops + 1) * sizeof f->ops[0]);
-    f->ops[f->nb_ops++] = *op;
+    int index;
+    int count;
+    unsigned long size;
+    WasmOp *old_ops;
+    WasmOp *ops;
+
+    index = f->nb_ops;
+    count = index + 1;
+    size = count * sizeof(WasmOp);
+    old_ops = f->ops;
+    ops = tcc_realloc(old_ops, size);
+    f->ops = ops;
+    f->ops[index] = *op;
+    f->nb_ops = count;
 }
 
 static WasmOp *wasm32_op_at(int pc)
@@ -557,12 +578,23 @@ static int wasm32_is_supported_val_type(WasmValType type)
 
 static int wasm32_append_abi_type(CType *type, WasmValType **types, int *n)
 {
+    int index;
+    int count;
+    unsigned long size;
     WasmValType vt = wasm32_val_type(type);
+    WasmValType *old_types;
+    WasmValType *new_types;
 
     if (!wasm32_is_supported_val_type(vt))
         return 0;
-    *types = tcc_realloc(*types, (*n + 1) * sizeof (*types)[0]);
-    (*types)[(*n)++] = vt;
+    index = *n;
+    count = index + 1;
+    size = count * sizeof(WasmValType);
+    old_types = *types;
+    new_types = tcc_realloc(old_types, size);
+    *types = new_types;
+    (*types)[index] = vt;
+    *n = count;
     return 1;
 }
 
@@ -673,9 +705,20 @@ static int wasm32_func_has_result(CType *type)
 
 static void wasm32_func_add_param_type(WasmFunc *fn, WasmValType type)
 {
-    fn->param_types = tcc_realloc(fn->param_types,
-                                  (fn->nb_params + 1) * sizeof fn->param_types[0]);
-    fn->param_types[fn->nb_params++] = type;
+    int index;
+    int count;
+    unsigned long size;
+    WasmValType *old_param_types;
+    WasmValType *param_types;
+
+    index = fn->nb_params;
+    count = index + 1;
+    size = count * sizeof(WasmValType);
+    old_param_types = fn->param_types;
+    param_types = tcc_realloc(old_param_types, size);
+    fn->param_types = param_types;
+    fn->param_types[index] = type;
+    fn->nb_params = count;
 }
 
 static void wasm32_func_add_abi_param(WasmFunc *fn, CType *type)
@@ -761,6 +804,14 @@ static int wasm32_is_setjmp_name(const char *name)
 static int wasm32_is_longjmp_name(const char *name)
 {
     return !strcmp(name, "longjmp") || !strcmp(name, "_longjmp");
+}
+
+static int wasm32_is_i64_helper_name(const char *name)
+{
+    return !strcmp(name, "__divdi3") || !strcmp(name, "__moddi3")
+        || !strcmp(name, "__udivdi3") || !strcmp(name, "__umoddi3")
+        || !strcmp(name, "__ashrdi3") || !strcmp(name, "__lshrdi3")
+        || !strcmp(name, "__ashldi3");
 }
 
 static int wasm32_func_type_id(CType *type)
@@ -912,18 +963,16 @@ static void wasm32_note_direct_call(const char *name, CType *type)
                                       nb_results, result_types, param_types);
 }
 
-static void wasm32_note_direct_call_site(const char *name, CType *type,
-                                         SValue *args, int nb_args,
-                                         int append_va_list)
+static void wasm32_note_direct_call_site_result(const char *name,
+                                                SValue *args, int nb_args,
+                                                int append_va_list,
+                                                int nb_results,
+                                                WasmValType result_types[2])
 {
     int nb_params, has_result;
     WasmValType result_type;
-    int nb_results;
-    WasmValType result_types[2];
     WasmValType *param_types;
 
-    if (!wasm32_func_result_types(type, result_types, &nb_results))
-        tcc_error("wasm32: unsupported imported function result type");
     has_result = nb_results != 0;
     result_type = has_result ? result_types[0] : WVT_VOID;
     param_types = wasm32_call_param_types(args, nb_args, append_va_list,
@@ -932,6 +981,19 @@ static void wasm32_note_direct_call_site(const char *name, CType *type,
         tcc_error("wasm32: unsupported imported function call argument type");
     wasm32_note_direct_call_signature(name, nb_params, has_result, result_type,
                                       nb_results, result_types, param_types);
+}
+
+static void wasm32_note_direct_call_site(const char *name, CType *type,
+                                         SValue *args, int nb_args,
+                                         int append_va_list)
+{
+    int nb_results;
+    WasmValType result_types[2];
+
+    if (!wasm32_func_result_types(type, result_types, &nb_results))
+        tcc_error("wasm32: unsupported imported function result type");
+    wasm32_note_direct_call_site_result(name, args, nb_args, append_va_list,
+                                        nb_results, result_types);
 }
 
 static void wasm32_free_imports(void)
@@ -1035,55 +1097,47 @@ static void wasm32_cmp_expr(CString *cs, int op, int a, int b)
 static const char *wasm32_load_op(CType *type)
 {
     int t = type->t;
-    switch (t & VT_BTYPE) {
-    case VT_BOOL:
+    int bt = t & VT_BTYPE;
+    int is_enum = (t & VT_STRUCT_MASK) == VT_ENUM;
+
+    if (bt == VT_BOOL)
         return "i32.load8_u";
-    case VT_BYTE:
+    if (bt == VT_BYTE)
         return (t & VT_UNSIGNED) ? "i32.load8_u" : "i32.load8_s";
-    case VT_SHORT:
+    if (bt == VT_SHORT)
         return (t & VT_UNSIGNED) ? "i32.load16_u" : "i32.load16_s";
-    case VT_INT:
-    case VT_ENUM:
-    case VT_PTR:
-    case VT_FUNC:
+    if (bt == VT_INT || is_enum || bt == VT_PTR || bt == VT_FUNC)
         return "i32.load";
-    case VT_LLONG:
+    if (bt == VT_LLONG)
         return "i64.load";
-    case VT_FLOAT:
+    if (bt == VT_FLOAT)
         return "f32.load";
-    case VT_DOUBLE:
-    case VT_LDOUBLE:
+    if (bt == VT_DOUBLE || bt == VT_LDOUBLE)
         return "f64.load";
-    default:
-        tcc_error("wasm32: unsupported memory load type");
-        return "i32.load";
-    }
+    tcc_error("wasm32: unsupported memory load type 0x%x", type->t);
+    return "i32.load";
 }
 
 static const char *wasm32_store_op(CType *type)
 {
-    switch (type->t & VT_BTYPE) {
-    case VT_BOOL:
-    case VT_BYTE:
+    int t = type->t;
+    int bt = t & VT_BTYPE;
+    int is_enum = (t & VT_STRUCT_MASK) == VT_ENUM;
+
+    if (bt == VT_BOOL || bt == VT_BYTE)
         return "i32.store8";
-    case VT_SHORT:
+    if (bt == VT_SHORT)
         return "i32.store16";
-    case VT_INT:
-    case VT_ENUM:
-    case VT_PTR:
-    case VT_FUNC:
+    if (bt == VT_INT || is_enum || bt == VT_PTR || bt == VT_FUNC)
         return "i32.store";
-    case VT_LLONG:
+    if (bt == VT_LLONG)
         return "i64.store";
-    case VT_FLOAT:
+    if (bt == VT_FLOAT)
         return "f32.store";
-    case VT_DOUBLE:
-    case VT_LDOUBLE:
+    if (bt == VT_DOUBLE || bt == VT_LDOUBLE)
         return "f64.store";
-    default:
-        tcc_error("wasm32: unsupported memory store type");
-        return "i32.store";
-    }
+    tcc_error("wasm32: unsupported memory store type 0x%x", type->t);
+    return "i32.store";
 }
 
 static void wasm32_addr_expr(CString *cs, int r, int offset)
@@ -1347,10 +1401,16 @@ ST_FUNC void gfunc_call(int nb_args)
     int variadic;
     int named_args;
     int implicit_variadic_named_args = -1;
+    int i64_helper = 0;
     int call_args;
     unsigned long va_size = 0;
     int keep[NB_REGS];
     int i;
+
+    if (nocode_wanted) {
+        vtop -= nb_args + 1;
+        return;
+    }
 
     direct = (func->r & (VT_VALMASK | VT_SYM | VT_LVAL))
              == (VT_CONST | VT_SYM) && func->sym;
@@ -1371,6 +1431,7 @@ ST_FUNC void gfunc_call(int nb_args)
             vtop -= nb_args + 1;
             return;
         }
+        i64_helper = wasm32_is_i64_helper_name(name);
     }
     if (direct && tcc_state->wasm_link_mode == WASM32_MODE_APP
         && wasm32_is_old_style_func_type(&func->type))
@@ -1434,11 +1495,17 @@ ST_FUNC void gfunc_call(int nb_args)
         }
     }
 
-    has_result = wasm32_func_has_result(&func->type);
-    result_type = wasm32_func_result_type(&func->type);
+    has_result = i64_helper ? 1 : wasm32_func_has_result(&func->type);
+    result_type = i64_helper ? WVT_I64 : wasm32_func_result_type(&func->type);
     cstr_new(&cs);
     if (direct) {
-        if (implicit_variadic_named_args >= 0)
+        if (i64_helper) {
+            WasmValType helper_results[2];
+            helper_results[0] = WVT_I64;
+            helper_results[1] = WVT_VOID;
+            wasm32_note_direct_call_site_result(name, func + 1, nb_args, 0,
+                                                1, helper_results);
+        } else if (implicit_variadic_named_args >= 0)
             wasm32_note_direct_call_site(name, &func->type, func + 1,
                                          named_args, 1);
         else
@@ -1939,10 +2006,16 @@ static void wasm32_build_block_map(WasmFunc *fn, WasmBlockMap *map)
 {
     int n = fn->nb_ops;
     int i;
+    unsigned char *start;
+    int *pc_to_block;
+    int *old_starts;
+    int *starts;
 
     memset(map, 0, sizeof *map);
-    map->start = tcc_mallocz(n + 1);
-    map->pc_to_block = tcc_malloc((n + 1) * sizeof map->pc_to_block[0]);
+    start = tcc_mallocz(n + 1);
+    pc_to_block = tcc_malloc((n + 1) * sizeof pc_to_block[0]);
+    map->start = start;
+    map->pc_to_block = pc_to_block;
     for (i = 0; i <= n; ++i)
         map->pc_to_block[i] = -1;
     map->start[0] = 1;
@@ -1966,10 +2039,15 @@ static void wasm32_build_block_map(WasmFunc *fn, WasmBlockMap *map)
     }
     for (i = 0; i <= n; ++i) {
         if (map->start[i]) {
-            map->starts = tcc_realloc(map->starts,
-                                      (map->nb_starts + 1) * sizeof map->starts[0]);
-            map->starts[map->nb_starts] = i;
-            map->pc_to_block[i] = map->nb_starts++;
+            int index = map->nb_starts;
+            int count = index + 1;
+            unsigned long size = count * sizeof(int);
+            old_starts = map->starts;
+            starts = tcc_realloc(old_starts, size);
+            map->starts = starts;
+            map->starts[index] = i;
+            map->pc_to_block[i] = index;
+            map->nb_starts = count;
         }
     }
 }
@@ -2731,6 +2809,7 @@ static void wasm32_emit_addr_globals(TCCState *s1, FILE *f)
     ElfSym *sym;
     int i;
 
+    fprintf(f, "  (global $__addr_0 i32 (i32.const 0))\n");
     for_each_elem(symtab_section, 1, sym, ElfSym) {
         addr_t addr;
         i = sym - (ElfSym *)symtab_section->data;

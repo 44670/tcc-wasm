@@ -10,12 +10,23 @@ function posixPath(parts) {
 
 function sourceFiles() {
   const includeDir = path.join(root, "include");
-  const headers = fs.readdirSync(includeDir)
-    .filter(name => name.endsWith(".h"))
-    .map(name => ({
-      src: posixPath(["include", name]),
-      resource: posixPath(["", "include", name])
-    }));
+  function walk(dir, rel) {
+    const out = [];
+    for (const name of fs.readdirSync(dir)) {
+      const full = path.join(dir, name);
+      const childRel = rel.concat(name);
+      const st = fs.statSync(full);
+      if (st.isDirectory())
+        out.push(...walk(full, childRel));
+      else if (name.endsWith(".h"))
+        out.push({
+          src: posixPath(["include"].concat(childRel)),
+          resource: posixPath(["", "include"].concat(childRel))
+        });
+    }
+    return out;
+  }
+  const headers = walk(includeDir, []);
   headers.push({
     src: "tcclib.h",
     resource: "/include/tcclib.h"
