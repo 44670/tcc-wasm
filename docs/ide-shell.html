@@ -525,8 +525,18 @@ int main(void)
       return wabtPromise;
     }
 
+    function formatWatPane(result) {
+      const diagnostics = (result.diagnostics || "").trim();
+      if (!diagnostics)
+        return result.wat;
+      const warningLines = diagnostics.split(/\r?\n/)
+        .map(line => `;; ${line}`)
+        .join("\n");
+      return `;; Compiler diagnostics\n${warningLines}\n\n${result.wat}`;
+    }
+
     function compileToWat() {
-      return compiler.compileApp(sourceEl.value);
+      return compiler.compileAppResult(sourceEl.value);
     }
 
     async function assembleWat(wat) {
@@ -556,8 +566,9 @@ int main(void)
       returnCodeEl.textContent = "";
       binarySizeEl.textContent = "";
       setStatus("Compiling");
-      compiledWat = compileToWat();
-      watEl.value = compiledWat;
+      const result = compileToWat();
+      compiledWat = result.wat;
+      watEl.value = formatWatPane(result);
       setStatus("Assembling");
       compiledBinary = await assembleWat(compiledWat);
       binarySizeEl.textContent = `${compiledBinary.length} bytes`;

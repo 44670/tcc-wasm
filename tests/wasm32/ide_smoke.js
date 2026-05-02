@@ -38,6 +38,14 @@ int main(void)
 }
 `;
 
+const WARNING_SOURCE = `
+int main(void)
+{
+    int value = 0;
+    return scanf("%d", &value);
+}
+`;
+
 const MEM_SOURCE = `
 void *memset(void *dst, int c, unsigned int n);
 void *memcpy(void *dst, const void *src, unsigned int n);
@@ -120,6 +128,13 @@ function assertEq(name, got, expected) {
              wat.includes('(import "libc" "scanf"'));
   assertTrue('app mode should export heap bounds',
              wat.includes('(export "__heap_base"'));
+
+  const warningResult = compiler.compileAppResult(WARNING_SOURCE);
+  assertTrue('compile result should keep app WAT',
+             warningResult.wat.includes('(module'));
+  assertTrue('compile result should keep warnings',
+             /warning: implicit declaration of function 'scanf'/.test(
+               warningResult.diagnostics));
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tcc-wasm-ide-'));
   const watPath = path.join(tmpDir, 'app.wat');

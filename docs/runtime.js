@@ -349,60 +349,66 @@
       }
     }
 
-    compileWithOptions(source, options) {
+    readCompileResult(rc) {
+      const wat = this.readString(this.exp("tcc_bare_output")(),
+                                  this.exp("tcc_bare_output_len")());
+      const diagnostics = this.readString(this.exp("tcc_bare_error")(),
+                                          this.exp("tcc_bare_error_len")());
+      if (rc !== 0) {
+        const err = new Error(diagnostics || "compile failed");
+        err.diagnostics = diagnostics;
+        err.wat = wat;
+        err.rc = rc;
+        throw err;
+      }
+      return { wat, diagnostics, rc };
+    }
+
+    compileWithOptionsResult(source, options) {
       const compile = this.exp("tcc_bare_compile_with_options");
       const free = this.exp("free");
       const sourcePtr = this.writeCString(source);
       const optionsPtr = this.writeCString(options || "");
       try {
-        const rc = compile(sourcePtr, optionsPtr);
-        const wat = this.readString(this.exp("tcc_bare_output")(),
-                                    this.exp("tcc_bare_output_len")());
-        const error = this.readString(this.exp("tcc_bare_error")(),
-                                      this.exp("tcc_bare_error_len")());
-        if (rc !== 0)
-          throw new Error(error || "compile failed");
-        return wat;
+        return this.readCompileResult(compile(sourcePtr, optionsPtr));
       } finally {
         free(optionsPtr);
         free(sourcePtr);
       }
     }
 
-    compile(source) {
+    compileWithOptions(source, options) {
+      return this.compileWithOptionsResult(source, options).wat;
+    }
+
+    compileResult(source) {
       const compile = this.exp("tcc_bare_compile");
       const free = this.exp("free");
       const sourcePtr = this.writeCString(source);
       try {
-        const rc = compile(sourcePtr);
-        const wat = this.readString(this.exp("tcc_bare_output")(),
-                                    this.exp("tcc_bare_output_len")());
-        const error = this.readString(this.exp("tcc_bare_error")(),
-                                      this.exp("tcc_bare_error_len")());
-        if (rc !== 0)
-          throw new Error(error || "compile failed");
-        return wat;
+        return this.readCompileResult(compile(sourcePtr));
+      } finally {
+        free(sourcePtr);
+      }
+    }
+
+    compile(source) {
+      return this.compileResult(source).wat;
+    }
+
+    compileAppResult(source) {
+      const compile = this.exp("tcc_bare_compile_app");
+      const free = this.exp("free");
+      const sourcePtr = this.writeCString(source);
+      try {
+        return this.readCompileResult(compile(sourcePtr));
       } finally {
         free(sourcePtr);
       }
     }
 
     compileApp(source) {
-      const compile = this.exp("tcc_bare_compile_app");
-      const free = this.exp("free");
-      const sourcePtr = this.writeCString(source);
-      try {
-        const rc = compile(sourcePtr);
-        const wat = this.readString(this.exp("tcc_bare_output")(),
-                                    this.exp("tcc_bare_output_len")());
-        const error = this.readString(this.exp("tcc_bare_error")(),
-                                      this.exp("tcc_bare_error_len")());
-        if (rc !== 0)
-          throw new Error(error || "compile failed");
-        return wat;
-      } finally {
-        free(sourcePtr);
-      }
+      return this.compileAppResult(source).wat;
     }
   }
 
