@@ -8,7 +8,7 @@
 
   function showServiceWorkerMessage(event) {
     const data = event.data || {};
-    if (data.type !== "offline-cache" || !data.msg)
+    if (!data.msg)
       return;
     console.log(data.msg);
     if (statusEl && !statusEl.classList.contains("error"))
