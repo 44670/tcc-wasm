@@ -1,5 +1,9 @@
-const CACHE_NAME = "tcc-wasm-v2";
+const CACHE_NAME = "tcc-wasm-v8";
 const STATIC_ASSETS = [
+  "./manifest.json",
+  "./icon-192.png",
+  "./icon-512.png",
+  "./apple-touch-icon.png",
   "./sw-register.js",
   "./ide-resources.js",
   "./runtime.js",

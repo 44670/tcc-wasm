@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TCC Wasm IDE</title>
+  <meta name="theme-color" content="#121722">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png">
   <script src="./sw-register.js" defer></script>
   <style>
     :root {
@@ -424,8 +428,9 @@
     <header>
       <div class="title">TCC Wasm IDE</div>
       <div class="actions">
-        <button id="compile" disabled>Compile</button>
-        <button id="run" disabled>Run</button>
+        <button id="compile" aria-keyshortcuts="F4" disabled>Compile (F4)</button>
+        <button id="run" aria-keyshortcuts="F5">Run (F5)</button>
+        <button id="save" class="secondary" aria-keyshortcuts="Control+S Meta+S">Save (Ctrl + S)</button>
         <button id="reset" class="secondary">Reset</button>
         <span id="status">Loading</span>
       </div>
@@ -450,7 +455,7 @@
           </section>
         </div>
         <section class="pane">
-          <div class="bar"><span>WAT</span></div>
+          <div class="bar"><span>compiler output</span></div>
           <textarea id="wat" readonly spellcheck="false"></textarea>
         </section>
       </section>
@@ -475,6 +480,7 @@ int main(void)
 `;
 
     const defaultStdin = "2 40\n";
+    const draftStorageKey = "tcc-wasm-ide-draft-v1";
     const statusEl = document.getElementById("status");
     const sourceEl = document.getElementById("source");
     const stdinEl = document.getElementById("stdin");
@@ -482,6 +488,7 @@ int main(void)
     const watEl = document.getElementById("wat");
     const compileButton = document.getElementById("compile");
     const runButton = document.getElementById("run");
+    const saveButton = document.getElementById("save");
     const resetButton = document.getElementById("reset");
     const binarySizeEl = document.getElementById("binary-size");
     const returnCodeEl = document.getElementById("return-code");
@@ -490,9 +497,72 @@ int main(void)
     let compiler;
     let appRuntime;
     let wabtPromise;
+    let bootPromise;
+    let compilePromise = null;
+    let runPromise = null;
     let compiledWat = "";
     let compiledBinary = null;
     let compiledModule = null;
+    let lastRunFailedInCompile = false;
+    let deferredInstallPrompt = null;
+    let installPromptRunClicks = 0;
+    let appInstalled = isStandaloneMode();
+
+    function isStandaloneMode() {
+      return window.matchMedia("(display-mode: standalone)").matches ||
+        window.navigator.standalone === true;
+    }
+
+    function rememberInstallPrompt(event) {
+      event.preventDefault();
+      deferredInstallPrompt = event;
+    }
+
+    function maybePromptInstallOnRun() {
+      if (appInstalled || installPromptRunClicks >= 2)
+        return;
+      installPromptRunClicks += 1;
+      if (!deferredInstallPrompt)
+        return;
+
+      const promptEvent = deferredInstallPrompt;
+      deferredInstallPrompt = null;
+      promptEvent.prompt();
+      promptEvent.userChoice.then(choice => {
+        if (choice.outcome === "accepted")
+          appInstalled = true;
+      }).catch(() => {
+        /* Ignore install prompt errors; Run should continue either way. */
+      });
+    }
+
+    function loadIdeDraft() {
+      try {
+        const raw = localStorage.getItem(draftStorageKey);
+        if (!raw)
+          return null;
+        const draft = JSON.parse(raw);
+        if (!draft || typeof draft.source !== "string" || typeof draft.stdin !== "string")
+          return null;
+        return draft;
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function saveIdeDraft() {
+      const draft = {
+        source: sourceEl.value,
+        stdin: stdinEl.value,
+        savedAt: new Date().toISOString()
+      };
+      try {
+        localStorage.setItem(draftStorageKey, JSON.stringify(draft));
+        setStatus("Saved");
+      } catch (err) {
+        setStatus("Save failed", true);
+      }
+    }
 
     function setStatus(text, isError) {
       statusEl.textContent = text;
@@ -506,7 +576,6 @@ int main(void)
       watEl.value = "";
       binarySizeEl.textContent = "";
       returnCodeEl.textContent = "";
-      runButton.disabled = true;
       if (status)
         setStatus(status);
     }
@@ -563,9 +632,11 @@ int main(void)
       }
     }
 
-    async function compile() {
+    async function compileOnce() {
+      if (!compiler)
+        throw new Error("IDE is still loading");
+
       compileButton.disabled = true;
-      runButton.disabled = true;
       returnCodeEl.textContent = "";
       binarySizeEl.textContent = "";
       setStatus("Compiling");
@@ -576,15 +647,35 @@ int main(void)
       compiledBinary = await assembleWat(compiledWat);
       compiledModule = await WebAssembly.compile(compiledBinary);
       binarySizeEl.textContent = `${compiledBinary.length} bytes`;
-      runButton.disabled = false;
       setStatus("Compiled");
-      compileButton.disabled = false;
     }
 
-    async function runProgram() {
+    async function compile() {
+      if (!compilePromise) {
+        compilePromise = compileOnce().finally(() => {
+          compilePromise = null;
+          compileButton.disabled = false;
+        });
+      }
+      return compilePromise;
+    }
+
+    async function runOnce() {
+      lastRunFailedInCompile = false;
+      if (!appRuntime && bootPromise)
+        await bootPromise;
+      if (!appRuntime)
+        throw new Error("IDE is still loading");
+      if (!compiledModule) {
+        try {
+          await compile();
+        } catch (err) {
+          lastRunFailedInCompile = true;
+          throw err;
+        }
+      }
       if (!compiledModule)
-        await compile();
-      runButton.disabled = true;
+        throw new Error("No compiled program");
       stdoutEl.value = "";
       returnCodeEl.textContent = "";
       setStatus("Running");
@@ -593,13 +684,22 @@ int main(void)
       stdoutEl.scrollTop = stdoutEl.scrollHeight;
       returnCodeEl.textContent = `rc ${result.rc}`;
       setStatus("Ran");
-      runButton.disabled = false;
+    }
+
+    async function runProgram() {
+      if (!runPromise) {
+        runPromise = runOnce().finally(() => {
+          runPromise = null;
+        });
+      }
+      return runPromise;
     }
 
     async function boot() {
-      sourceEl.value = defaultSource;
+      const draft = loadIdeDraft();
+      sourceEl.value = draft ? draft.source : defaultSource;
       sourceEditor.refresh();
-      stdinEl.value = defaultStdin;
+      stdinEl.value = draft ? draft.stdin : defaultStdin;
       [compiler, appRuntime] = await Promise.all([
         TccWasmRuntime.CompilerHost.create({
           wasm: "./tcc.wasm",
@@ -613,21 +713,61 @@ int main(void)
       await compile();
     }
 
-    compileButton.addEventListener("click", () => {
+    function requestCompile() {
+      if (!compiler) {
+        setStatus("Loading");
+        return;
+      }
       compile().catch(err => {
         watEl.value = err && err.stack ? err.stack : String(err);
         setStatus("Compile failed", true);
         compileButton.disabled = false;
       });
+    }
+
+    function requestRun() {
+      maybePromptInstallOnRun();
+      runProgram().catch(err => {
+        if (lastRunFailedInCompile) {
+          stdoutEl.value = "compile error";
+          if (!watEl.value)
+            watEl.value = err && err.stack ? err.stack : String(err);
+        } else {
+          stdoutEl.value = err && err.stack ? err.stack : String(err);
+        }
+        setStatus("Run failed", true);
+      });
+    }
+
+    compileButton.addEventListener("click", requestCompile);
+
+    runButton.addEventListener("click", requestRun);
+
+    window.addEventListener("beforeinstallprompt", rememberInstallPrompt);
+
+    window.addEventListener("appinstalled", () => {
+      appInstalled = true;
+      deferredInstallPrompt = null;
     });
 
-    runButton.addEventListener("click", () => {
-      runProgram().catch(err => {
-        stdoutEl.value = err && err.stack ? err.stack : String(err);
-        setStatus("Run failed", true);
-        runButton.disabled = false;
-      });
+    window.addEventListener("keydown", event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        saveIdeDraft();
+        return;
+      }
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "F4") {
+        event.preventDefault();
+        requestCompile();
+        return;
+      }
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "F5") {
+        event.preventDefault();
+        requestRun();
+      }
     });
+
+    saveButton.addEventListener("click", saveIdeDraft);
 
     resetButton.addEventListener("click", () => {
       sourceEl.value = defaultSource;
@@ -641,7 +781,8 @@ int main(void)
       invalidateBuild("Edited");
     });
 
-    boot().catch(err => {
+    bootPromise = boot();
+    bootPromise.catch(err => {
       watEl.value = err && err.stack ? err.stack : String(err);
       setStatus("Load failed", true);
     });

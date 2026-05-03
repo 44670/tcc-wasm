@@ -56,6 +56,19 @@
     return WebAssembly.compile(await readBytes(source));
   }
 
+  function decodeBase64(text) {
+    if (typeof atob === "function") {
+      const binary = atob(String(text));
+      const raw = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; ++i)
+        raw[i] = binary.charCodeAt(i);
+      return raw;
+    }
+    if (typeof Buffer === "function")
+      return new Uint8Array(Buffer.from(String(text), "base64"));
+    throw new Error("base64 resource decoding is not available");
+  }
+
   function fillRandom(dst) {
     if (typeof crypto === "object" && crypto.getRandomValues) {
       crypto.getRandomValues(dst);
@@ -405,9 +418,12 @@
       if (typeof addResource !== "function")
         throw new Error("compiler does not support virtual resources");
       const files = resources.files || resources;
+      const isBase64 = resources.encoding === "base64";
       for (const name of Object.keys(files).sort()) {
         const data = files[name];
-        const raw = encoder.encode(typeof data === "string" ? data : String(data));
+        const raw = isBase64
+          ? decodeBase64(data)
+          : encoder.encode(typeof data === "string" ? data : String(data));
         const namePtr = this.writeCString(name);
         const dataPtr = this.malloc(raw.length + 1);
         try {

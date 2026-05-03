@@ -1,0 +1,24 @@
+{
+  "name": "TCC Wasm IDE",
+  "short_name": "TCC IDE",
+  "description": "A free offline-capable in-browser C IDE for students and coding contest practice.",
+  "id": "/ide-shell",
+  "start_url": "/ide-shell",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#121722",
+  "categories": ["education", "developer", "productivity"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
