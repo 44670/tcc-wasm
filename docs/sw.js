@@ -1,8 +1,8 @@
-var CACHE_NAME = "v9";
+var CACHE_NAME = "v10";
 
 var urlsToCache = [
   "/",
-  "/ide-shell.html",
+  "/ide-shell",
   "/manifest.json",
   "/icon-192.png",
   "/icon-512.png",
@@ -16,15 +16,6 @@ var urlsToCache = [
   "/tcc.wasm",
   "/libc.wasm"
 ];
-
-function cacheRequest(request) {
-  var url = new URL(request.url);
-  if (url.origin === self.location.origin && url.pathname === "/ide-shell") {
-    url.pathname = "/ide-shell.html";
-    return new Request(url.toString());
-  }
-  return request;
-}
 
 self.addEventListener("install", function (event) {
   postMsg({ msg: "Updating..." });
@@ -50,7 +41,7 @@ self.addEventListener("fetch", function (event) {
     return;
 
   event.respondWith(
-    caches.match(cacheRequest(event.request), {
+    caches.match(event.request, {
       ignoreSearch: true
     }).then(function (response) {
       if (response)
