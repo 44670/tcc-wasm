@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TCC Wasm IDE</title>
+  <script src="./sw-register.js" defer></script>
   <style>
     :root {
       color-scheme: light;
@@ -518,7 +519,7 @@ int main(void)
             return;
           }
           const script = document.createElement("script");
-          script.src = "https://cdn.jsdelivr.net/npm/wabt@1.0.37/index.js";
+          script.src = "./wabt.js";
           script.onload = () => globalThis.WabtModule().then(resolve, reject);
           script.onerror = () => reject(new Error("could not load WABT"));
           document.head.appendChild(script);

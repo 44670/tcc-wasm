@@ -3,7 +3,51 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Free In-Browser C IDE</title>
+  <title>Free In-Browser C IDE | Offline C Compiler for Students</title>
+  <meta name="description" content="Write, compile, and run C in your browser with a free offline-capable IDE for students, algorithms, and coding contest practice.">
+  <meta name="robots" content="index,follow">
+  <meta name="theme-color" content="#121722">
+  <link rel="canonical" href="https://tcc.44670.org/">
+  <meta property="og:site_name" content="TCC Wasm IDE">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://tcc.44670.org/">
+  <meta property="og:title" content="Free In-Browser C IDE">
+  <meta property="og:description" content="A free offline-capable browser C IDE for students learning C, algorithms, and coding contest problem solving.">
+  <meta property="og:image" content="https://tcc.44670.org/og-image.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="TCC Wasm IDE, a free in-browser C IDE for students">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Free In-Browser C IDE">
+  <meta name="twitter:description" content="Write, compile, and run C in your browser with an offline-capable IDE for students and contest practice.">
+  <meta name="twitter:image" content="https://tcc.44670.org/og-image.jpg">
+  <meta name="twitter:image:alt" content="TCC Wasm IDE, a free in-browser C IDE for students">
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "TCC Wasm IDE",
+      "alternateName": "Free In-Browser C IDE",
+      "url": "https://tcc.44670.org/",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Any",
+      "browserRequirements": "Requires WebAssembly support",
+      "description": "A free in-browser C IDE for students to write, compile, and run C code with offline-capable browser use.",
+      "featureList": [
+        "Compile and run C in the browser",
+        "Offline-capable student practice",
+        "Standard input and output panels",
+        "Generated WAT view for learning"
+      ],
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    }
+  </script>
+  <script src="./sw-register.js" defer></script>
   <style>
     :root {
       color-scheme: light;
@@ -322,6 +366,65 @@
       line-height: 1.45;
     }
 
+    .details-section {
+      padding: 44px 24px 56px;
+      background: #f4f6f3;
+    }
+
+    .details-inner {
+      width: min(1080px, 100%);
+      margin: 0 auto;
+    }
+
+    .details-kicker {
+      margin: 0 0 10px;
+      color: #245b45;
+      font-size: 13px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .details-section h2 {
+      width: min(720px, 100%);
+      margin: 0;
+      color: #151922;
+      font-size: clamp(26px, 4vw, 42px);
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .details-lead {
+      width: min(760px, 100%);
+      margin: 16px 0 0;
+      color: #465160;
+      font-size: 17px;
+      line-height: 1.62;
+    }
+
+    .details-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 28px;
+      margin-top: 30px;
+      padding-top: 26px;
+      border-top: 1px solid #d9dfd8;
+    }
+
+    .details-grid h3 {
+      margin: 0 0 8px;
+      color: #151922;
+      font-size: 17px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .details-grid p {
+      margin: 0;
+      color: #53606f;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
     @media (max-width: 900px) {
       .hero {
         min-height: 86svh;
@@ -398,15 +501,24 @@
       .student-strip div {
         padding: 15px 18px;
       }
+
+      .details-section {
+        padding: 34px 18px 44px;
+      }
+
+      .details-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+      }
     }
   </style>
 </head>
 <body>
-  <div class="page">
+  <main class="page">
     <section class="hero" aria-labelledby="hero-title">
       <nav class="nav" aria-label="Primary">
         <div class="brand">TCC Wasm IDE</div>
-        <a class="nav-link" href="./ide-shell.html">Open IDE</a>
+        <a class="nav-link" href="./ide-shell">Open IDE</a>
       </nav>
 
       <div class="scene" aria-hidden="true">
@@ -475,7 +587,7 @@ ready offline</div>
           <span class="tag">Student friendly</span>
           <span class="tag">Runs locally</span>
         </div>
-        <a class="cta" href="./ide-shell.html">Start Coding</a>
+        <a class="cta" href="./ide-shell">Start Coding</a>
       </div>
     </section>
 
@@ -493,6 +605,28 @@ ready offline</div>
         <span>Simple input, output, and generated WAT views make experiments visible.</span>
       </div>
     </section>
-  </div>
+
+    <section class="details-section" aria-labelledby="practice-title">
+      <div class="details-inner">
+        <p class="details-kicker">C practice in the browser</p>
+        <h2 id="practice-title">An offline-capable C compiler for learning and contests</h2>
+        <p class="details-lead">TCC Wasm IDE runs a WebAssembly C compiler directly in the browser, so students can practice standard input/output problems, test algorithms, and inspect generated WAT without installing a desktop toolchain.</p>
+        <div class="details-grid">
+          <section>
+            <h3>Learn C fundamentals</h3>
+            <p>Experiment with functions, arrays, pointers, stdio, and stdlib examples in a focused editor made for quick practice.</p>
+          </section>
+          <section>
+            <h3>Practice contest problems</h3>
+            <p>Paste sample input, compile, run, and compare stdout in the same page while working through algorithm exercises.</p>
+          </section>
+          <section>
+            <h3>Use it offline</h3>
+            <p>After the IDE assets load on your device, compatible browsers can keep the coding environment available without a network connection.</p>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
 </body>
 </html>
